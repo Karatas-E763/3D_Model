@@ -117,10 +117,11 @@ function HotspotMarker({
 
       {showLabel && (
         <Html
+          key={panelsOpen ? "under-modals" : "default"}
           position={label3D}
           center
           distanceFactor={12}
-          zIndexRange={panelsOpen ? [30, 0] : [200, 0]}
+          zIndexRange={panelsOpen ? [-1, -10] : [200, 0]}
           style={{ pointerEvents: "none" }}
         >
           <motion.div
