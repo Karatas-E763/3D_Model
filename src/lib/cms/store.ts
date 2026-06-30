@@ -1,15 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
-import { get, put } from "@vercel/blob";
-import { CMS_PATHS, CMS_ROOT, SEED_PATHS } from "./paths";
 import {
-  canUseBlobStorage,
-  canUseCloudCmsStorage,
-  canUseKvStorage,
-  cmsStorageUnavailableMessage,
-  getBlobReadWriteToken,
-  getKvRestConfig,
-} from "./blob-auth";
+  getCmsPaths,
+  getDeployedCmsPaths,
+  SEED_PATHS,
+} from "./paths";
 import productsSeed from "@/data/products/products.json";
 import vehiclesSeed from "@/data/vehicles/vehicles.json";
 import quoteConfigSeed from "@/data/quote-config.json";
@@ -23,8 +18,6 @@ import unidadesEspecializadasHotspots from "@/data/hotspots/unidades-especializa
 import activosSinMotorHotspots from "@/data/hotspots/activos-sin-motor.json";
 import solucionesEspecialesHotspots from "@/data/hotspots/soluciones-especiales.json";
 
-const BLOB_CMS_PREFIX = "cms";
-
 const HOTSPOT_SEEDS: Record<string, { hotspots: unknown[] }> = {
   "transporte-carga": transporteCargaHotspots,
   "transporte-pasajeros": transportePasajerosHotspots,
@@ -37,9 +30,21 @@ const HOTSPOT_SEEDS: Record<string, { hotspots: unknown[] }> = {
   "soluciones-especiales": solucionesEspecialesHotspots,
 };
 
-function storageKeyFor(filePath: string) {
-  const relative = path.relative(CMS_ROOT, filePath).replace(/\\/g, "/");
-  return `${BLOB_CMS_PREFIX}/${relative}`;
+type CmsMemory = Map<string, unknown>;
+
+const globalForCms = globalThis as typeof globalThis & {
+  __directtrackCmsMemory?: CmsMemory;
+};
+
+function memoryStore(): CmsMemory {
+  if (!globalForCms.__directtrackCmsMemory) {
+    globalForCms.__directtrackCmsMemory = new Map();
+  }
+  return globalForCms.__directtrackCmsMemory;
+}
+
+function memoryKey(filePath: string) {
+  return filePath.replace(/\\/g, "/");
 }
 
 async function ensureDir(dir: string) {
@@ -60,239 +65,144 @@ async function readFileIfExists(filePath: string) {
   return fs.readFile(filePath, "utf-8");
 }
 
-async function readKvJson<T>(key: string): Promise<T | null> {
-  const config = getKvRestConfig();
-  if (!config) return null;
-
-  try {
-    const res = await fetch(`${config.url}/get/${encodeURIComponent(key)}`, {
-      headers: { Authorization: `Bearer ${config.token}` },
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
-    const payload = (await res.json()) as { result?: string | null };
-    if (!payload.result) return null;
-    return JSON.parse(payload.result) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function writeKvJson(key: string, data: unknown) {
-  const config = getKvRestConfig();
-  if (!config) {
-    throw new Error(cmsStorageUnavailableMessage());
-  }
-
-  const res = await fetch(config.url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(["SET", key, JSON.stringify(data, null, 2)]),
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(detail || "No se pudo guardar en Upstash Redis");
-  }
-}
-
-async function readBlobJson<T>(pathname: string): Promise<T | null> {
-  const token = getBlobReadWriteToken();
-  const baseOptions = token ? { token } : {};
-
-  for (const access of ["private", "public"] as const) {
-    try {
-      const result = await get(pathname, { ...baseOptions, access });
-      if (result?.statusCode === 200 && result.stream) {
-        const text = await new Response(result.stream).text();
-        return JSON.parse(text) as T;
-      }
-    } catch {
-      // Try the other access mode or treat as missing.
-    }
-  }
-  return null;
-}
-
-async function writeBlobJson(pathname: string, data: unknown) {
-  const body = JSON.stringify(data, null, 2);
-  const token = getBlobReadWriteToken();
-  const baseOptions = {
-    contentType: "application/json",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    ...(token ? { token } : {}),
-  };
-
-  const errors: unknown[] = [];
-  for (const access of ["private", "public"] as const) {
-    try {
-      await put(pathname, body, { ...baseOptions, access });
-      return;
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-
-  const last = errors[errors.length - 1];
-  if (last instanceof Error) {
-    throw last;
-  }
-  throw new Error("No se pudo guardar en Vercel Blob");
+async function writeJsonFile(filePath: string, data: unknown) {
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+  memoryStore().set(memoryKey(filePath), data);
 }
 
 async function seedFile(cmsPath: string, seedPath: string) {
-  await ensureDir(path.dirname(cmsPath));
-  if (!(await fileExists(cmsPath))) {
-    const content = await fs.readFile(seedPath, "utf-8");
-    await fs.writeFile(cmsPath, content, "utf-8");
+  if (await fileExists(cmsPath)) return;
+  const seedContent = await readFileIfExists(seedPath);
+  if (seedContent) {
+    await writeJsonFile(cmsPath, JSON.parse(seedContent) as unknown);
+    return;
   }
 }
 
-async function seedHotspots() {
-  await ensureDir(CMS_PATHS.hotspotsDir);
+async function seedFromFallback(cmsPath: string, fallback: unknown) {
+  if (await fileExists(cmsPath)) return;
+  await writeJsonFile(cmsPath, fallback);
+}
+
+async function seedHotspots(cmsHotspotsDir: string) {
+  await ensureDir(cmsHotspotsDir);
+
+  if (process.env.VERCEL === "1") {
+    for (const [vehicleId, data] of Object.entries(HOTSPOT_SEEDS)) {
+      const cmsFile = path.join(cmsHotspotsDir, `${vehicleId}.json`);
+      await seedFromFallback(cmsFile, data);
+    }
+    return;
+  }
+
   const seedFiles = await fs.readdir(SEED_PATHS.hotspotsDir);
   for (const file of seedFiles) {
     if (!file.endsWith(".json")) continue;
-    const cmsFile = path.join(CMS_PATHS.hotspotsDir, file);
-    if (!(await fileExists(cmsFile))) {
-      const content = await fs.readFile(
-        path.join(SEED_PATHS.hotspotsDir, file),
-        "utf-8"
-      );
-      await fs.writeFile(cmsFile, content, "utf-8");
-    }
+    const cmsFile = path.join(cmsHotspotsDir, file);
+    await seedFile(cmsFile, path.join(SEED_PATHS.hotspotsDir, file));
+  }
+}
+
+async function seedFromDeployedCopy(cmsPath: string, deployedPath: string) {
+  if (await fileExists(cmsPath)) return;
+  const deployedContent = await readFileIfExists(deployedPath);
+  if (deployedContent) {
+    await writeJsonFile(cmsPath, JSON.parse(deployedContent) as unknown);
   }
 }
 
 export async function ensureCMS() {
-  if (canUseCloudCmsStorage()) return;
-  await seedFile(CMS_PATHS.products, SEED_PATHS.products);
-  await seedFile(CMS_PATHS.vehicles, SEED_PATHS.vehicles);
-  await seedFile(CMS_PATHS.quoteConfig, SEED_PATHS.quoteConfig);
-  await seedHotspots();
-}
+  const cms = getCmsPaths();
+  const deployed = getDeployedCmsPaths();
 
-async function readFromCloud<T>(key: string): Promise<T | null> {
-  if (canUseBlobStorage()) {
-    const fromBlob = await readBlobJson<T>(key);
-    if (fromBlob !== null) return fromBlob;
-  }
-  if (canUseKvStorage()) {
-    return readKvJson<T>(key);
-  }
-  return null;
-}
-
-async function writeToCloud(key: string, data: unknown) {
-  if (canUseBlobStorage()) {
-    await writeBlobJson(key, data);
-    return;
-  }
-  if (canUseKvStorage()) {
-    await writeKvJson(key, data);
-    return;
-  }
   if (process.env.VERCEL === "1") {
-    throw new Error(cmsStorageUnavailableMessage());
+    await seedFromDeployedCopy(cms.products, deployed.products);
+    await seedFromDeployedCopy(cms.vehicles, deployed.vehicles);
+    await seedFromDeployedCopy(cms.quoteConfig, deployed.quoteConfig);
+
+    await seedFromFallback(cms.products, productsSeed);
+    await seedFromFallback(cms.vehicles, vehiclesSeed);
+    await seedFromFallback(cms.quoteConfig, quoteConfigSeed);
+    await seedHotspots(cms.hotspotsDir);
+    return;
   }
+
+  await seedFile(cms.products, SEED_PATHS.products);
+  await seedFile(cms.vehicles, SEED_PATHS.vehicles);
+  await seedFile(cms.quoteConfig, SEED_PATHS.quoteConfig);
+  await seedHotspots(cms.hotspotsDir);
 }
 
 export async function readCMS<T>(filePath: string, fallback: T): Promise<T> {
-  const key = storageKeyFor(filePath);
-  const fromCloud = await readFromCloud<T>(key);
-  if (fromCloud !== null) return fromCloud;
+  const key = memoryKey(filePath);
+  const cached = memoryStore().get(key);
+  if (cached !== undefined) return cached as T;
 
-  try {
-    await ensureCMS();
-    const content = await readFileIfExists(filePath);
-    if (content) return JSON.parse(content) as T;
-  } catch {
-    // Seeding can fail on read-only serverless filesystems.
+  await ensureCMS();
+
+  const content = await readFileIfExists(filePath);
+  if (content) {
+    const parsed = JSON.parse(content) as T;
+    memoryStore().set(key, parsed);
+    return parsed;
   }
 
   return fallback;
 }
 
 export async function writeCMS(filePath: string, data: unknown) {
-  const key = storageKeyFor(filePath);
-
-  if (canUseCloudCmsStorage()) {
-    await writeToCloud(key, data);
-    return;
-  }
-
-  if (process.env.VERCEL === "1") {
-    throw new Error(cmsStorageUnavailableMessage());
-  }
-
-  await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+  await writeJsonFile(filePath, data);
 }
 
 export async function readProducts() {
-  return readCMS<unknown[]>(CMS_PATHS.products, productsSeed);
+  const cms = getCmsPaths();
+  return readCMS<unknown[]>(cms.products, productsSeed);
 }
 
 export async function writeProducts(data: unknown[]) {
-  await writeCMS(CMS_PATHS.products, data);
+  const cms = getCmsPaths();
+  await writeCMS(cms.products, data);
 }
 
 export async function readVehicles() {
-  return readCMS<unknown[]>(CMS_PATHS.vehicles, vehiclesSeed);
+  const cms = getCmsPaths();
+  return readCMS<unknown[]>(cms.vehicles, vehiclesSeed);
 }
 
 export async function writeVehicles(data: unknown[]) {
-  await writeCMS(CMS_PATHS.vehicles, data);
+  const cms = getCmsPaths();
+  await writeCMS(cms.vehicles, data);
 }
 
 export async function readQuoteConfig() {
-  return readCMS<Record<string, unknown>>(CMS_PATHS.quoteConfig, quoteConfigSeed);
+  const cms = getCmsPaths();
+  return readCMS<Record<string, unknown>>(cms.quoteConfig, quoteConfigSeed);
 }
 
 export async function writeQuoteConfig(data: Record<string, unknown>) {
-  await writeCMS(CMS_PATHS.quoteConfig, data);
+  const cms = getCmsPaths();
+  await writeCMS(cms.quoteConfig, data);
 }
 
 export async function readHotspots(vehicleId: string) {
-  const filePath = path.join(CMS_PATHS.hotspotsDir, `${vehicleId}.json`);
+  const cms = getCmsPaths();
+  const filePath = path.join(cms.hotspotsDir, `${vehicleId}.json`);
   const fallback = HOTSPOT_SEEDS[vehicleId] ?? { hotspots: [] };
-  const key = storageKeyFor(filePath);
-
-  const fromCloud = await readFromCloud<{ hotspots: unknown[] }>(key);
-  if (fromCloud !== null) return fromCloud;
-
-  try {
-    await ensureCMS();
-    const content = await readFileIfExists(filePath);
-    if (content) return JSON.parse(content) as { hotspots: unknown[] };
-  } catch {
-    // Ignore read-only filesystem errors on serverless.
-  }
-
-  const seedPath = path.join(SEED_PATHS.hotspotsDir, `${vehicleId}.json`);
-  const seedContent = await readFileIfExists(seedPath);
-  if (seedContent) return JSON.parse(seedContent) as { hotspots: unknown[] };
-
-  return fallback;
+  return readCMS<{ hotspots: unknown[] }>(filePath, fallback);
 }
 
 export async function writeHotspots(vehicleId: string, data: { hotspots: unknown[] }) {
-  await writeCMS(path.join(CMS_PATHS.hotspotsDir, `${vehicleId}.json`), data);
+  const cms = getCmsPaths();
+  await writeCMS(path.join(cms.hotspotsDir, `${vehicleId}.json`), data);
 }
 
 export async function listHotspotVehicles() {
-  if (canUseCloudCmsStorage()) {
-    return Object.keys(HOTSPOT_SEEDS);
-  }
+  const cms = getCmsPaths();
 
   try {
     await ensureCMS();
-    const files = await fs.readdir(CMS_PATHS.hotspotsDir);
+    const files = await fs.readdir(cms.hotspotsDir);
     return files
       .filter((f) => f.endsWith(".json"))
       .map((f) => f.replace(".json", ""));

@@ -1,7 +1,6 @@
 import fs from "fs/promises";
+import os from "os";
 import path from "path";
-import { put } from "@vercel/blob";
-import { canUseBlobStorage, getBlobReadWriteToken } from "./blob-auth";
 
 export type UploadType = "image" | "pdf" | "video";
 
@@ -11,17 +10,28 @@ export const UPLOAD_PREFIX: Record<UploadType, string> = {
   video: "videos",
 };
 
-const LOCAL_DIRS: Record<UploadType, string> = {
-  image: path.join(process.cwd(), "public", "assets", "images", "products"),
-  pdf: path.join(process.cwd(), "public", "assets", "pdf"),
-  video: path.join(process.cwd(), "public", "assets", "videos"),
-};
-
 const PUBLIC_PREFIX: Record<UploadType, string> = {
   image: "/assets/images/products",
   pdf: "/assets/pdf",
   video: "/assets/videos",
 };
+
+function getLocalDirs(): Record<UploadType, string> {
+  if (process.env.VERCEL === "1") {
+    const root = path.join(os.tmpdir(), "directtrack-uploads");
+    return {
+      image: path.join(root, "images", "products"),
+      pdf: path.join(root, "pdf"),
+      video: path.join(root, "videos"),
+    };
+  }
+
+  return {
+    image: path.join(process.cwd(), "public", "assets", "images", "products"),
+    pdf: path.join(process.cwd(), "public", "assets", "pdf"),
+    video: path.join(process.cwd(), "public", "assets", "videos"),
+  };
+}
 
 export const ALLOWED_MIME: Record<UploadType, string[]> = {
   image: ["image/png", "image/jpeg", "image/webp", "image/gif"],
@@ -53,14 +63,15 @@ export function mimeError(type: UploadType) {
 }
 
 export function useBlobStorage() {
-  return canUseBlobStorage();
+  return false;
 }
 
 export async function storeFileLocally(
   file: File,
   type: UploadType
 ): Promise<{ path: string; filename: string }> {
-  const dir = LOCAL_DIRS[type];
+  const dirs = getLocalDirs();
+  const dir = dirs[type];
   await fs.mkdir(dir, { recursive: true });
 
   const filename = sanitizeFilename(file.name) || "archivo";
@@ -78,18 +89,5 @@ export async function storeFileInBlob(
   file: File,
   type: UploadType
 ): Promise<{ path: string; filename: string }> {
-  const pathname = buildUploadPath(type, file.name);
-  const buffer = Buffer.from(await file.arrayBuffer());
-
-  const blob = await put(pathname, buffer, {
-    access: "public",
-    contentType: file.type || undefined,
-    addRandomSuffix: false,
-    ...(getBlobReadWriteToken() ? { token: getBlobReadWriteToken() } : {}),
-  });
-
-  return {
-    path: blob.url,
-    filename: path.basename(pathname),
-  };
+  return storeFileLocally(file, type);
 }
