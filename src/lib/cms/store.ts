@@ -1,12 +1,12 @@
 import fs from "fs/promises";
 import path from "path";
 import {
-  canUseGitHubStorage,
-  getRepoIdentity,
-  readGitHubJson,
-  readPublicGitHubJson,
-  writeGitHubJson,
-} from "./github-store";
+  BLOB_PATHS,
+  listBlobHotspotIds,
+  readBlobJson,
+  writeBlobJson,
+} from "./blob-store";
+import { canUseBlobStorage } from "./blob-auth";
 import { getCmsPaths } from "./paths";
 import productsSeed from "@/data/products/products.json";
 import vehiclesSeed from "@/data/vehicles/vehicles.json";
@@ -33,7 +33,7 @@ const HOTSPOT_SEEDS: Record<string, { hotspots: unknown[] }> = {
   "soluciones-especiales": solucionesEspecialesHotspots,
 };
 
-const REPO_PATHS = {
+const LOCAL_PATHS = {
   products: "data/cms/products.json",
   vehicles: "data/cms/vehicles.json",
   quoteConfig: "data/cms/quote-config.json",
@@ -105,7 +105,7 @@ async function seedHotspotsIfMissing(hotspotsDir: string) {
     const target = path.join(hotspotsDir, `${vehicleId}.json`);
     if (await fileExists(target)) continue;
 
-    const deployed = deployedPath(REPO_PATHS.hotspot(vehicleId));
+    const deployed = deployedPath(LOCAL_PATHS.hotspot(vehicleId));
     const fromDeployed = await readJsonFile<{ hotspots: unknown[] }>(deployed);
     if (fromDeployed !== null) {
       await writeJsonFile(target, fromDeployed);
@@ -117,7 +117,7 @@ async function seedHotspotsIfMissing(hotspotsDir: string) {
 }
 
 export async function ensureCMS() {
-  if (isVercel() && (canUseGitHubStorage() || getRepoIdentity())) return;
+  if (isVercel() && canUseBlobStorage()) return;
 
   const writable = getWritableCmsPaths();
   const committed = getCmsPaths();
@@ -139,11 +139,27 @@ export async function ensureCMS() {
   await seedHotspotsIfMissing(writable.hotspotsDir);
 }
 
+async function readFallbackJson<T>(localRepoPath: string, fallback: T): Promise<T> {
+  const fromDeployed = await readJsonFile<T>(deployedPath(localRepoPath));
+  if (fromDeployed !== null) return fromDeployed;
+  return fallback;
+}
+
 async function readPersistedJson<T>(
-  repoPath: string,
+  blobPath: string,
+  localRepoPath: string,
   writablePath: string,
   fallback: T
 ): Promise<T> {
+  if (canUseBlobStorage()) {
+    const fromBlob = await readBlobJson<T>(blobPath);
+    if (fromBlob !== null) return fromBlob;
+
+    if (isVercel()) {
+      return readFallbackJson(localRepoPath, fallback);
+    }
+  }
+
   if (!isVercel()) {
     await ensureCMS();
 
@@ -151,57 +167,41 @@ async function readPersistedJson<T>(
     if (fromWritable !== null) return fromWritable;
   }
 
-  if (canUseGitHubStorage() || (isVercel() && getRepoIdentity())) {
-    const fromGitHub = await readGitHubJson<T>(repoPath);
-    if (fromGitHub !== null) {
-      return fromGitHub;
-    }
-  }
-
-  if (isVercel() && getRepoIdentity()) {
-    const fromPublicGitHub = await readPublicGitHubJson<T>(repoPath);
-    if (fromPublicGitHub !== null) {
-      return fromPublicGitHub;
-    }
-  }
-
-  const fromDeployed = await readJsonFile<T>(deployedPath(repoPath));
-  if (fromDeployed !== null) return fromDeployed;
-
-  return fallback;
+  return readFallbackJson(localRepoPath, fallback);
 }
 
 async function writePersistedJson(
-  repoPath: string,
+  blobPath: string,
   writablePath: string,
   data: unknown
 ) {
-  if (isVercel()) {
-    if (!canUseGitHubStorage()) {
-      throw new Error(
-        "No se pudo guardar el JSON del CMS de forma permanente. En Vercel, configura GITHUB_TOKEN con permiso de escritura en el repositorio para persistir los archivos en data/cms."
-      );
-    }
+  if (canUseBlobStorage()) {
+    await writeBlobJson(blobPath, data);
 
-    await writeGitHubJson(repoPath, data, `cms: update ${repoPath}`);
+    if (!isVercel()) {
+      try {
+        await writeJsonFile(writablePath, data);
+      } catch {
+        // Local mirror is best-effort when Blob is configured locally.
+      }
+    }
     return;
   }
 
-  await writeJsonFile(writablePath, data);
-
-  if (canUseGitHubStorage()) {
-    try {
-      await writeGitHubJson(repoPath, data, `cms: update ${repoPath}`);
-    } catch {
-      // GitHub sync is optional when running locally.
-    }
+  if (isVercel()) {
+    throw new Error(
+      "No se pudo guardar el JSON del CMS. Conecta un almacén Vercel Blob al proyecto y vuelve a desplegar."
+    );
   }
+
+  await writeJsonFile(writablePath, data);
 }
 
 export async function readProducts() {
   const writable = getWritableCmsPaths();
   return readPersistedJson<unknown[]>(
-    REPO_PATHS.products,
+    BLOB_PATHS.products,
+    LOCAL_PATHS.products,
     writable.products,
     productsSeed
   );
@@ -209,13 +209,14 @@ export async function readProducts() {
 
 export async function writeProducts(data: unknown[]) {
   const writable = getWritableCmsPaths();
-  await writePersistedJson(REPO_PATHS.products, writable.products, data);
+  await writePersistedJson(BLOB_PATHS.products, writable.products, data);
 }
 
 export async function readVehicles() {
   const writable = getWritableCmsPaths();
   return readPersistedJson<unknown[]>(
-    REPO_PATHS.vehicles,
+    BLOB_PATHS.vehicles,
+    LOCAL_PATHS.vehicles,
     writable.vehicles,
     vehiclesSeed
   );
@@ -223,13 +224,14 @@ export async function readVehicles() {
 
 export async function writeVehicles(data: unknown[]) {
   const writable = getWritableCmsPaths();
-  await writePersistedJson(REPO_PATHS.vehicles, writable.vehicles, data);
+  await writePersistedJson(BLOB_PATHS.vehicles, writable.vehicles, data);
 }
 
 export async function readQuoteConfig() {
   const writable = getWritableCmsPaths();
   return readPersistedJson<Record<string, unknown>>(
-    REPO_PATHS.quoteConfig,
+    BLOB_PATHS.quoteConfig,
+    LOCAL_PATHS.quoteConfig,
     writable.quoteConfig,
     quoteConfigSeed
   );
@@ -237,30 +239,42 @@ export async function readQuoteConfig() {
 
 export async function writeQuoteConfig(data: Record<string, unknown>) {
   const writable = getWritableCmsPaths();
-  await writePersistedJson(REPO_PATHS.quoteConfig, writable.quoteConfig, data);
+  await writePersistedJson(BLOB_PATHS.quoteConfig, writable.quoteConfig, data);
 }
 
 export async function readHotspots(vehicleId: string) {
   const writable = getWritableCmsPaths();
-  const repoPath = REPO_PATHS.hotspot(vehicleId);
+  const blobPath = BLOB_PATHS.hotspot(vehicleId);
+  const localRepoPath = LOCAL_PATHS.hotspot(vehicleId);
   const localPath = path.join(writable.hotspotsDir, `${vehicleId}.json`);
   const fallback = HOTSPOT_SEEDS[vehicleId] ?? { hotspots: [] };
-  return readPersistedJson<{ hotspots: unknown[] }>(repoPath, localPath, fallback);
+  return readPersistedJson<{ hotspots: unknown[] }>(
+    blobPath,
+    localRepoPath,
+    localPath,
+    fallback
+  );
 }
 
 export async function writeHotspots(vehicleId: string, data: { hotspots: unknown[] }) {
   const writable = getWritableCmsPaths();
-  const repoPath = REPO_PATHS.hotspot(vehicleId);
+  const blobPath = BLOB_PATHS.hotspot(vehicleId);
   const localPath = path.join(writable.hotspotsDir, `${vehicleId}.json`);
-  await writePersistedJson(repoPath, localPath, data);
+  await writePersistedJson(blobPath, localPath, data);
 }
 
 export async function listHotspotVehicles() {
-  const writable = getWritableCmsPaths();
-
-  if (canUseGitHubStorage() || (isVercel() && getRepoIdentity())) {
+  if (canUseBlobStorage()) {
+    try {
+      const fromBlob = await listBlobHotspotIds();
+      if (fromBlob.length > 0) return fromBlob;
+    } catch {
+      // Fall back to known vehicle ids.
+    }
     return Object.keys(HOTSPOT_SEEDS);
   }
+
+  const writable = getWritableCmsPaths();
 
   try {
     await ensureCMS();
