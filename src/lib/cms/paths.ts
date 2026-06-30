@@ -7,20 +7,17 @@ export const SEED_PATHS = {
   hotspotsDir: path.join(process.cwd(), "src", "data", "hotspots"),
 } as const;
 
-export const CMS_ROOT = path.join(process.cwd(), "data", "cms");
-
-export const CMS_REPO_PATHS = {
-  products: "data/cms/products.json",
-  vehicles: "data/cms/vehicles.json",
-  quoteConfig: "data/cms/quote-config.json",
-  hotspot: (vehicleId: string) => `data/cms/hotspots/${vehicleId}.json`,
-} as const;
+/** Committed JSON files tracked in git under data/cms. */
+export function getCmsRoot() {
+  return path.join(process.cwd(), "data", "cms");
+}
 
 export function getCmsPaths() {
+  const root = getCmsRoot();
   return {
-    products: path.join(CMS_ROOT, "products.json"),
-    vehicles: path.join(CMS_ROOT, "vehicles.json"),
-    quoteConfig: path.join(CMS_ROOT, "quote-config.json"),
-    hotspotsDir: path.join(CMS_ROOT, "hotspots"),
+    products: path.join(root, "products.json"),
+    vehicles: path.join(root, "vehicles.json"),
+    quoteConfig: path.join(root, "quote-config.json"),
+    hotspotsDir: path.join(root, "hotspots"),
   };
 }

@@ -1,15 +1,12 @@
 import fs from "fs/promises";
+import os from "os";
 import path from "path";
 import {
-  CMS_REPO_PATHS,
-  getCmsPaths,
-  SEED_PATHS,
-} from "./paths";
-import {
-  canUseRemoteCmsStorage,
-  readRemoteCmsJson,
-  writeRemoteCmsJson,
-} from "./remote-store";
+  canUseGitHubStorage,
+  readGitHubJson,
+  writeGitHubJson,
+} from "./github-store";
+import { getCmsPaths, SEED_PATHS } from "./paths";
 import productsSeed from "@/data/products/products.json";
 import vehiclesSeed from "@/data/vehicles/vehicles.json";
 import quoteConfigSeed from "@/data/quote-config.json";
@@ -35,21 +32,36 @@ const HOTSPOT_SEEDS: Record<string, { hotspots: unknown[] }> = {
   "soluciones-especiales": solucionesEspecialesHotspots,
 };
 
-type CmsMemory = Map<string, unknown>;
-
-const globalForCms = globalThis as typeof globalThis & {
-  __directtrackCmsMemory?: CmsMemory;
-};
-
-function memoryStore(): CmsMemory {
-  if (!globalForCms.__directtrackCmsMemory) {
-    globalForCms.__directtrackCmsMemory = new Map();
-  }
-  return globalForCms.__directtrackCmsMemory;
-}
+const REPO_PATHS = {
+  products: "data/cms/products.json",
+  vehicles: "data/cms/vehicles.json",
+  quoteConfig: "data/cms/quote-config.json",
+  hotspot: (vehicleId: string) => `data/cms/hotspots/${vehicleId}.json`,
+} as const;
 
 function isVercel() {
   return process.env.VERCEL === "1";
+}
+
+function getWritableRoot() {
+  if (isVercel() && !canUseGitHubStorage()) {
+    return path.join(os.tmpdir(), "directtrack-cms");
+  }
+  return path.join(process.cwd(), "data", "cms");
+}
+
+function getWritableCmsPaths() {
+  const root = getWritableRoot();
+  return {
+    products: path.join(root, "products.json"),
+    vehicles: path.join(root, "vehicles.json"),
+    quoteConfig: path.join(root, "quote-config.json"),
+    hotspotsDir: path.join(root, "hotspots"),
+  };
+}
+
+function deployedPath(repoPath: string) {
+  return path.join(process.cwd(), repoPath);
 }
 
 async function ensureDir(dir: string) {
@@ -65,159 +77,191 @@ async function fileExists(filePath: string) {
   }
 }
 
-async function readLocalJsonFile<T>(filePath: string): Promise<T | null> {
-  if (!(await fileExists(filePath))) return null;
-  const content = await fs.readFile(filePath, "utf-8");
-  return JSON.parse(content) as T;
+async function readJsonFile<T>(filePath: string): Promise<T | null> {
+  try {
+    const content = await fs.readFile(filePath, "utf-8");
+    return JSON.parse(content) as T;
+  } catch {
+    return null;
+  }
 }
 
-async function writeLocalJsonFile(filePath: string, data: unknown) {
+async function writeJsonFile(filePath: string, data: unknown) {
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
 }
 
-async function seedLocalFile(cmsPath: string, seedPath: string, fallback: unknown) {
-  if (await fileExists(cmsPath)) return;
-
-  const seedContent = await readLocalJsonFile<unknown>(seedPath);
-  if (seedContent !== null) {
-    await writeLocalJsonFile(cmsPath, seedContent);
-    return;
+async function seedFileIfMissing(targetPath: string, sourcePath: string) {
+  if (await fileExists(targetPath)) return;
+  const source = await readJsonFile<unknown>(sourcePath);
+  if (source !== null) {
+    await writeJsonFile(targetPath, source);
   }
-
-  await writeLocalJsonFile(cmsPath, fallback);
 }
 
-async function seedHotspotsLocal(cmsHotspotsDir: string) {
-  await ensureDir(cmsHotspotsDir);
+async function seedFallbackIfMissing(targetPath: string, fallback: unknown) {
+  if (await fileExists(targetPath)) return;
+  await writeJsonFile(targetPath, fallback);
+}
 
-  if (isVercel()) {
-    for (const [vehicleId, data] of Object.entries(HOTSPOT_SEEDS)) {
-      const cmsFile = path.join(cmsHotspotsDir, `${vehicleId}.json`);
-      if (!(await fileExists(cmsFile))) {
-        await writeLocalJsonFile(cmsFile, data);
-      }
+async function seedHotspotsIfMissing(hotspotsDir: string) {
+  await ensureDir(hotspotsDir);
+
+  for (const [vehicleId, data] of Object.entries(HOTSPOT_SEEDS)) {
+    const target = path.join(hotspotsDir, `${vehicleId}.json`);
+    if (await fileExists(target)) continue;
+
+    const deployed = deployedPath(REPO_PATHS.hotspot(vehicleId));
+    const fromDeployed = await readJsonFile<{ hotspots: unknown[] }>(deployed);
+    if (fromDeployed !== null) {
+      await writeJsonFile(target, fromDeployed);
+      continue;
     }
-    return;
-  }
 
-  const seedFiles = await fs.readdir(SEED_PATHS.hotspotsDir);
-  for (const file of seedFiles) {
-    if (!file.endsWith(".json")) continue;
-    const cmsFile = path.join(cmsHotspotsDir, file);
-    await seedLocalFile(
-      cmsFile,
-      path.join(SEED_PATHS.hotspotsDir, file),
-      HOTSPOT_SEEDS[file.replace(".json", "")] ?? { hotspots: [] }
-    );
+    await writeJsonFile(target, data);
   }
 }
 
 export async function ensureCMS() {
-  if (isVercel() && canUseRemoteCmsStorage()) return;
+  if (isVercel() && canUseGitHubStorage()) return;
 
-  const cms = getCmsPaths();
-  await seedLocalFile(cms.products, SEED_PATHS.products, productsSeed);
-  await seedLocalFile(cms.vehicles, SEED_PATHS.vehicles, vehiclesSeed);
-  await seedLocalFile(cms.quoteConfig, SEED_PATHS.quoteConfig, quoteConfigSeed);
-  await seedHotspotsLocal(cms.hotspotsDir);
+  const writable = getWritableCmsPaths();
+  const committed = getCmsPaths();
+
+  await seedFileIfMissing(writable.products, committed.products);
+  await seedFileIfMissing(writable.vehicles, committed.vehicles);
+  await seedFileIfMissing(writable.quoteConfig, committed.quoteConfig);
+
+  if (!(await fileExists(writable.products))) {
+    await seedFallbackIfMissing(writable.products, productsSeed);
+  }
+  if (!(await fileExists(writable.vehicles))) {
+    await seedFallbackIfMissing(writable.vehicles, vehiclesSeed);
+  }
+  if (!(await fileExists(writable.quoteConfig))) {
+    await seedFallbackIfMissing(writable.quoteConfig, quoteConfigSeed);
+  }
+
+  await seedHotspotsIfMissing(writable.hotspotsDir);
 }
 
-async function readCMS<T>(repoPath: string, localPath: string, fallback: T): Promise<T> {
-  const cacheKey = repoPath;
-  const cached = memoryStore().get(cacheKey);
-  if (cached !== undefined) return cached as T;
-
-  if (isVercel()) {
-    const remote = await readRemoteCmsJson<T>(repoPath);
-    if (remote !== null) {
-      memoryStore().set(cacheKey, remote);
-      return remote;
+async function readPersistedJson<T>(
+  repoPath: string,
+  writablePath: string,
+  fallback: T
+): Promise<T> {
+  if (isVercel() && canUseGitHubStorage()) {
+    const fromGitHub = await readGitHubJson<T>(repoPath);
+    if (fromGitHub !== null) {
+      try {
+        await writeJsonFile(writablePath, fromGitHub);
+      } catch {
+        // Mirror to disk is best-effort on serverless.
+      }
+      return fromGitHub;
     }
   }
 
   await ensureCMS();
 
-  const local = await readLocalJsonFile<T>(localPath);
-  if (local !== null) {
-    memoryStore().set(cacheKey, local);
-    return local;
-  }
+  const fromWritable = await readJsonFile<T>(writablePath);
+  if (fromWritable !== null) return fromWritable;
+
+  const fromDeployed = await readJsonFile<T>(deployedPath(repoPath));
+  if (fromDeployed !== null) return fromDeployed;
 
   return fallback;
 }
 
-async function writeCMS(repoPath: string, localPath: string, data: unknown) {
-  memoryStore().set(repoPath, data);
+async function writePersistedJson(
+  repoPath: string,
+  writablePath: string,
+  data: unknown
+) {
+  let persisted = false;
 
-  if (isVercel()) {
-    await writeRemoteCmsJson(repoPath, data);
-    try {
-      await writeLocalJsonFile(localPath, data);
-    } catch {
-      // Deployed filesystem is read-only on Vercel; remote store is authoritative.
-    }
-    return;
+  if (isVercel() && canUseGitHubStorage()) {
+    await writeGitHubJson(repoPath, data, `cms: update ${repoPath}`);
+    persisted = true;
   }
 
-  await writeLocalJsonFile(localPath, data);
+  try {
+    await writeJsonFile(writablePath, data);
+    persisted = true;
+  } catch (error) {
+    if (!isVercel()) throw error;
+  }
+
+  if (!persisted) {
+    throw new Error(
+      "No se pudo guardar el JSON del CMS de forma permanente. En Vercel, configura GITHUB_TOKEN para persistir los archivos en data/cms del repositorio."
+    );
+  }
 }
 
 export async function readProducts() {
-  const cms = getCmsPaths();
-  return readCMS<unknown[]>(CMS_REPO_PATHS.products, cms.products, productsSeed);
+  const writable = getWritableCmsPaths();
+  return readPersistedJson<unknown[]>(
+    REPO_PATHS.products,
+    writable.products,
+    productsSeed
+  );
 }
 
 export async function writeProducts(data: unknown[]) {
-  const cms = getCmsPaths();
-  await writeCMS(CMS_REPO_PATHS.products, cms.products, data);
+  const writable = getWritableCmsPaths();
+  await writePersistedJson(REPO_PATHS.products, writable.products, data);
 }
 
 export async function readVehicles() {
-  const cms = getCmsPaths();
-  return readCMS<unknown[]>(CMS_REPO_PATHS.vehicles, cms.vehicles, vehiclesSeed);
+  const writable = getWritableCmsPaths();
+  return readPersistedJson<unknown[]>(
+    REPO_PATHS.vehicles,
+    writable.vehicles,
+    vehiclesSeed
+  );
 }
 
 export async function writeVehicles(data: unknown[]) {
-  const cms = getCmsPaths();
-  await writeCMS(CMS_REPO_PATHS.vehicles, cms.vehicles, data);
+  const writable = getWritableCmsPaths();
+  await writePersistedJson(REPO_PATHS.vehicles, writable.vehicles, data);
 }
 
 export async function readQuoteConfig() {
-  const cms = getCmsPaths();
-  return readCMS<Record<string, unknown>>(
-    CMS_REPO_PATHS.quoteConfig,
-    cms.quoteConfig,
+  const writable = getWritableCmsPaths();
+  return readPersistedJson<Record<string, unknown>>(
+    REPO_PATHS.quoteConfig,
+    writable.quoteConfig,
     quoteConfigSeed
   );
 }
 
 export async function writeQuoteConfig(data: Record<string, unknown>) {
-  const cms = getCmsPaths();
-  await writeCMS(CMS_REPO_PATHS.quoteConfig, cms.quoteConfig, data);
+  const writable = getWritableCmsPaths();
+  await writePersistedJson(REPO_PATHS.quoteConfig, writable.quoteConfig, data);
 }
 
 export async function readHotspots(vehicleId: string) {
-  const cms = getCmsPaths();
-  const repoPath = CMS_REPO_PATHS.hotspot(vehicleId);
-  const localPath = path.join(cms.hotspotsDir, `${vehicleId}.json`);
+  const writable = getWritableCmsPaths();
+  const repoPath = REPO_PATHS.hotspot(vehicleId);
+  const localPath = path.join(writable.hotspotsDir, `${vehicleId}.json`);
   const fallback = HOTSPOT_SEEDS[vehicleId] ?? { hotspots: [] };
-  return readCMS<{ hotspots: unknown[] }>(repoPath, localPath, fallback);
+  return readPersistedJson<{ hotspots: unknown[] }>(repoPath, localPath, fallback);
 }
 
 export async function writeHotspots(vehicleId: string, data: { hotspots: unknown[] }) {
-  const cms = getCmsPaths();
-  const repoPath = CMS_REPO_PATHS.hotspot(vehicleId);
-  const localPath = path.join(cms.hotspotsDir, `${vehicleId}.json`);
-  await writeCMS(repoPath, localPath, data);
+  const writable = getWritableCmsPaths();
+  const repoPath = REPO_PATHS.hotspot(vehicleId);
+  const localPath = path.join(writable.hotspotsDir, `${vehicleId}.json`);
+  await writePersistedJson(repoPath, localPath, data);
 }
 
 export async function listHotspotVehicles() {
-  const cms = getCmsPaths();
+  const writable = getWritableCmsPaths();
 
   try {
     await ensureCMS();
-    const files = await fs.readdir(cms.hotspotsDir);
+    const files = await fs.readdir(writable.hotspotsDir);
     return files
       .filter((f) => f.endsWith(".json"))
       .map((f) => f.replace(".json", ""));
