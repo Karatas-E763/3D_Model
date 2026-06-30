@@ -12,6 +12,7 @@ import {
   validateUploadType,
   type UploadType,
 } from "@/lib/cms/upload";
+import { cmsStorageUnavailableMessage } from "@/lib/cms/blob-auth";
 
 export const runtime = "nodejs";
 
@@ -30,8 +31,7 @@ async function handleBlobClientUpload(request: Request) {
   if (!useBlobStorage()) {
     return NextResponse.json(
       {
-        error:
-          "Almacenamiento en la nube no configurado. Conecta Vercel Blob al proyecto en el panel de Vercel.",
+        error: cmsStorageUnavailableMessage(),
       },
       { status: 503 }
     );
@@ -80,10 +80,16 @@ async function handleFormUpload(request: Request) {
     return NextResponse.json({ error: mimeError(uploadType) }, { status: 400 });
   }
 
-  const result = useBlobStorage()
-    ? await storeFileInBlob(file, uploadType)
-    : await storeFileLocally(file, uploadType);
+  if (useBlobStorage()) {
+    const result = await storeFileInBlob(file, uploadType);
+    return NextResponse.json(result);
+  }
 
+  if (process.env.VERCEL === "1") {
+    return NextResponse.json({ error: cmsStorageUnavailableMessage() }, { status: 503 });
+  }
+
+  const result = await storeFileLocally(file, uploadType);
   return NextResponse.json(result);
 }
 

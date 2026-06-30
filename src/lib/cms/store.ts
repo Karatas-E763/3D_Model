@@ -2,6 +2,14 @@ import fs from "fs/promises";
 import path from "path";
 import { get, put } from "@vercel/blob";
 import { CMS_PATHS, CMS_ROOT, SEED_PATHS } from "./paths";
+import {
+  canUseBlobStorage,
+  canUseCloudCmsStorage,
+  canUseKvStorage,
+  cmsStorageUnavailableMessage,
+  getBlobReadWriteToken,
+  getKvRestConfig,
+} from "./blob-auth";
 import productsSeed from "@/data/products/products.json";
 import vehiclesSeed from "@/data/vehicles/vehicles.json";
 import quoteConfigSeed from "@/data/quote-config.json";
@@ -29,15 +37,7 @@ const HOTSPOT_SEEDS: Record<string, { hotspots: unknown[] }> = {
   "soluciones-especiales": solucionesEspecialesHotspots,
 };
 
-function shouldUseBlob() {
-  return (
-    process.env.VERCEL === "1" ||
-    Boolean(process.env.BLOB_READ_WRITE_TOKEN) ||
-    Boolean(process.env.BLOB_STORE_ID)
-  );
-}
-
-function blobPathnameFor(filePath: string) {
+function storageKeyFor(filePath: string) {
   const relative = path.relative(CMS_ROOT, filePath).replace(/\\/g, "/");
   return `${BLOB_CMS_PREFIX}/${relative}`;
 }
@@ -60,10 +60,53 @@ async function readFileIfExists(filePath: string) {
   return fs.readFile(filePath, "utf-8");
 }
 
+async function readKvJson<T>(key: string): Promise<T | null> {
+  const config = getKvRestConfig();
+  if (!config) return null;
+
+  try {
+    const res = await fetch(`${config.url}/get/${encodeURIComponent(key)}`, {
+      headers: { Authorization: `Bearer ${config.token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const payload = (await res.json()) as { result?: string | null };
+    if (!payload.result) return null;
+    return JSON.parse(payload.result) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function writeKvJson(key: string, data: unknown) {
+  const config = getKvRestConfig();
+  if (!config) {
+    throw new Error(cmsStorageUnavailableMessage());
+  }
+
+  const res = await fetch(config.url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(["SET", key, JSON.stringify(data, null, 2)]),
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || "No se pudo guardar en Upstash Redis");
+  }
+}
+
 async function readBlobJson<T>(pathname: string): Promise<T | null> {
+  const token = getBlobReadWriteToken();
+  const baseOptions = token ? { token } : {};
+
   for (const access of ["private", "public"] as const) {
     try {
-      const result = await get(pathname, { access });
+      const result = await get(pathname, { ...baseOptions, access });
       if (result?.statusCode === 200 && result.stream) {
         const text = await new Response(result.stream).text();
         return JSON.parse(text) as T;
@@ -77,10 +120,12 @@ async function readBlobJson<T>(pathname: string): Promise<T | null> {
 
 async function writeBlobJson(pathname: string, data: unknown) {
   const body = JSON.stringify(data, null, 2);
+  const token = getBlobReadWriteToken();
   const baseOptions = {
     contentType: "application/json",
     addRandomSuffix: false,
     allowOverwrite: true,
+    ...(token ? { token } : {}),
   };
 
   const errors: unknown[] = [];
@@ -125,18 +170,42 @@ async function seedHotspots() {
 }
 
 export async function ensureCMS() {
-  if (shouldUseBlob()) return;
+  if (canUseCloudCmsStorage()) return;
   await seedFile(CMS_PATHS.products, SEED_PATHS.products);
   await seedFile(CMS_PATHS.vehicles, SEED_PATHS.vehicles);
   await seedFile(CMS_PATHS.quoteConfig, SEED_PATHS.quoteConfig);
   await seedHotspots();
 }
 
-export async function readCMS<T>(filePath: string, fallback: T): Promise<T> {
-  if (shouldUseBlob()) {
-    const fromBlob = await readBlobJson<T>(blobPathnameFor(filePath));
+async function readFromCloud<T>(key: string): Promise<T | null> {
+  if (canUseBlobStorage()) {
+    const fromBlob = await readBlobJson<T>(key);
     if (fromBlob !== null) return fromBlob;
   }
+  if (canUseKvStorage()) {
+    return readKvJson<T>(key);
+  }
+  return null;
+}
+
+async function writeToCloud(key: string, data: unknown) {
+  if (canUseBlobStorage()) {
+    await writeBlobJson(key, data);
+    return;
+  }
+  if (canUseKvStorage()) {
+    await writeKvJson(key, data);
+    return;
+  }
+  if (process.env.VERCEL === "1") {
+    throw new Error(cmsStorageUnavailableMessage());
+  }
+}
+
+export async function readCMS<T>(filePath: string, fallback: T): Promise<T> {
+  const key = storageKeyFor(filePath);
+  const fromCloud = await readFromCloud<T>(key);
+  if (fromCloud !== null) return fromCloud;
 
   try {
     await ensureCMS();
@@ -150,9 +219,15 @@ export async function readCMS<T>(filePath: string, fallback: T): Promise<T> {
 }
 
 export async function writeCMS(filePath: string, data: unknown) {
-  if (shouldUseBlob()) {
-    await writeBlobJson(blobPathnameFor(filePath), data);
+  const key = storageKeyFor(filePath);
+
+  if (canUseCloudCmsStorage()) {
+    await writeToCloud(key, data);
     return;
+  }
+
+  if (process.env.VERCEL === "1") {
+    throw new Error(cmsStorageUnavailableMessage());
   }
 
   await ensureDir(path.dirname(filePath));
@@ -186,11 +261,10 @@ export async function writeQuoteConfig(data: Record<string, unknown>) {
 export async function readHotspots(vehicleId: string) {
   const filePath = path.join(CMS_PATHS.hotspotsDir, `${vehicleId}.json`);
   const fallback = HOTSPOT_SEEDS[vehicleId] ?? { hotspots: [] };
+  const key = storageKeyFor(filePath);
 
-  if (shouldUseBlob()) {
-    const fromBlob = await readBlobJson<{ hotspots: unknown[] }>(blobPathnameFor(filePath));
-    if (fromBlob !== null) return fromBlob;
-  }
+  const fromCloud = await readFromCloud<{ hotspots: unknown[] }>(key);
+  if (fromCloud !== null) return fromCloud;
 
   try {
     await ensureCMS();
@@ -212,7 +286,7 @@ export async function writeHotspots(vehicleId: string, data: { hotspots: unknown
 }
 
 export async function listHotspotVehicles() {
-  if (shouldUseBlob()) {
+  if (canUseCloudCmsStorage()) {
     return Object.keys(HOTSPOT_SEEDS);
   }
 

@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { put } from "@vercel/blob";
+import { canUseBlobStorage, getBlobReadWriteToken } from "./blob-auth";
 
 export type UploadType = "image" | "pdf" | "video";
 
@@ -52,7 +53,7 @@ export function mimeError(type: UploadType) {
 }
 
 export function useBlobStorage() {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+  return canUseBlobStorage();
 }
 
 export async function storeFileLocally(
@@ -84,6 +85,7 @@ export async function storeFileInBlob(
     access: "public",
     contentType: file.type || undefined,
     addRandomSuffix: false,
+    ...(getBlobReadWriteToken() ? { token: getBlobReadWriteToken() } : {}),
   });
 
   return {
