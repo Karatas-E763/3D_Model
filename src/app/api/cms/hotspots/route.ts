@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { readHotspots, writeHotspots } from "@/lib/cms/store";
 import { requireAdmin } from "@/lib/auth";
 
+export const runtime = "nodejs";
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -31,6 +33,9 @@ export async function PUT(request: Request) {
     if (error instanceof Error && error.message === "UNAUTHORIZED") {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
-    return NextResponse.json({ error: "Error al guardar hotspots" }, { status: 500 });
+    console.error("[cms/hotspots]", error);
+    const message =
+      error instanceof Error ? error.message : "Error al guardar hotspots";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

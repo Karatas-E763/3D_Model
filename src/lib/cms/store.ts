@@ -2,7 +2,6 @@ import fs from "fs/promises";
 import path from "path";
 import { get, put } from "@vercel/blob";
 import { CMS_PATHS, CMS_ROOT, SEED_PATHS } from "./paths";
-import { useBlobStorage } from "./upload";
 import productsSeed from "@/data/products/products.json";
 import vehiclesSeed from "@/data/vehicles/vehicles.json";
 import quoteConfigSeed from "@/data/quote-config.json";
@@ -30,6 +29,14 @@ const HOTSPOT_SEEDS: Record<string, { hotspots: unknown[] }> = {
   "soluciones-especiales": solucionesEspecialesHotspots,
 };
 
+function shouldUseBlob() {
+  return (
+    process.env.VERCEL === "1" ||
+    Boolean(process.env.BLOB_READ_WRITE_TOKEN) ||
+    Boolean(process.env.BLOB_STORE_ID)
+  );
+}
+
 function blobPathnameFor(filePath: string) {
   const relative = path.relative(CMS_ROOT, filePath).replace(/\\/g, "/");
   return `${BLOB_CMS_PREFIX}/${relative}`;
@@ -54,23 +61,43 @@ async function readFileIfExists(filePath: string) {
 }
 
 async function readBlobJson<T>(pathname: string): Promise<T | null> {
-  try {
-    const result = await get(pathname, { access: "public" });
-    if (!result || result.statusCode !== 200 || !result.stream) return null;
-    const text = await new Response(result.stream).text();
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
+  for (const access of ["private", "public"] as const) {
+    try {
+      const result = await get(pathname, { access });
+      if (result?.statusCode === 200 && result.stream) {
+        const text = await new Response(result.stream).text();
+        return JSON.parse(text) as T;
+      }
+    } catch {
+      // Try the other access mode or treat as missing.
+    }
   }
+  return null;
 }
 
 async function writeBlobJson(pathname: string, data: unknown) {
-  await put(pathname, JSON.stringify(data, null, 2), {
-    access: "public",
+  const body = JSON.stringify(data, null, 2);
+  const baseOptions = {
     contentType: "application/json",
     addRandomSuffix: false,
     allowOverwrite: true,
-  });
+  };
+
+  const errors: unknown[] = [];
+  for (const access of ["private", "public"] as const) {
+    try {
+      await put(pathname, body, { ...baseOptions, access });
+      return;
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+
+  const last = errors[errors.length - 1];
+  if (last instanceof Error) {
+    throw last;
+  }
+  throw new Error("No se pudo guardar en Vercel Blob");
 }
 
 async function seedFile(cmsPath: string, seedPath: string) {
@@ -98,7 +125,7 @@ async function seedHotspots() {
 }
 
 export async function ensureCMS() {
-  if (useBlobStorage()) return;
+  if (shouldUseBlob()) return;
   await seedFile(CMS_PATHS.products, SEED_PATHS.products);
   await seedFile(CMS_PATHS.vehicles, SEED_PATHS.vehicles);
   await seedFile(CMS_PATHS.quoteConfig, SEED_PATHS.quoteConfig);
@@ -106,7 +133,7 @@ export async function ensureCMS() {
 }
 
 export async function readCMS<T>(filePath: string, fallback: T): Promise<T> {
-  if (useBlobStorage()) {
+  if (shouldUseBlob()) {
     const fromBlob = await readBlobJson<T>(blobPathnameFor(filePath));
     if (fromBlob !== null) return fromBlob;
   }
@@ -123,27 +150,13 @@ export async function readCMS<T>(filePath: string, fallback: T): Promise<T> {
 }
 
 export async function writeCMS(filePath: string, data: unknown) {
-  if (useBlobStorage()) {
+  if (shouldUseBlob()) {
     await writeBlobJson(blobPathnameFor(filePath), data);
     return;
   }
 
-  try {
-    await ensureDir(path.dirname(filePath));
-    await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (
-      process.env.VERCEL &&
-      error instanceof Error &&
-      (error.message.includes("read-only") || code === "EROFS" || code === "EACCES")
-    ) {
-      throw new Error(
-        "No se puede escribir en el servidor. Conecta Vercel Blob al proyecto para guardar cambios en producción."
-      );
-    }
-    throw error;
-  }
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
 }
 
 export async function readProducts() {
@@ -174,7 +187,7 @@ export async function readHotspots(vehicleId: string) {
   const filePath = path.join(CMS_PATHS.hotspotsDir, `${vehicleId}.json`);
   const fallback = HOTSPOT_SEEDS[vehicleId] ?? { hotspots: [] };
 
-  if (useBlobStorage()) {
+  if (shouldUseBlob()) {
     const fromBlob = await readBlobJson<{ hotspots: unknown[] }>(blobPathnameFor(filePath));
     if (fromBlob !== null) return fromBlob;
   }
@@ -199,7 +212,7 @@ export async function writeHotspots(vehicleId: string, data: { hotspots: unknown
 }
 
 export async function listHotspotVehicles() {
-  if (useBlobStorage()) {
+  if (shouldUseBlob()) {
     return Object.keys(HOTSPOT_SEEDS);
   }
 

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { readVehicles, writeVehicles } from "@/lib/cms/store";
 import { requireAdmin } from "@/lib/auth";
 
+export const runtime = "nodejs";
+
 export async function GET() {
   try {
     const data = await readVehicles();
@@ -24,6 +26,9 @@ export async function PUT(request: Request) {
     if (error instanceof Error && error.message === "UNAUTHORIZED") {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
-    return NextResponse.json({ error: "Error al guardar unidades" }, { status: 500 });
+    console.error("[cms/vehicles]", error);
+    const message =
+      error instanceof Error ? error.message : "Error al guardar unidades";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

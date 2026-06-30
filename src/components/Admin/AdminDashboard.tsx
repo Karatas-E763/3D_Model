@@ -83,6 +83,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     const res = await fetch(url, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      cache: "no-store",
       body: JSON.stringify(data),
     });
     if (res.ok) {
