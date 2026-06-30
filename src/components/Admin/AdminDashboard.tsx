@@ -44,6 +44,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [selectedVehicle, setSelectedVehicle] = useState(VEHICLE_IDS[0]);
   const [hotspots, setHotspots] = useState<HotspotInputData[]>([]);
   const [status, setStatus] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "success" | "error">("idle");
   const [loading, setLoading] = useState(true);
   const [productModalOpen, setProductModalOpen] = useState(false);
   const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null);
@@ -79,25 +80,41 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   }, [selectedVehicle]);
 
   const save = async (url: string, data: unknown, label: string) => {
+    if (saveState === "saving") return;
+
+    setSaveState("saving");
     setStatus(null);
-    const res = await fetch(url, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      cache: "no-store",
-      body: JSON.stringify(data),
-    });
-    if (res.ok) {
-      setStatus(`${label} guardado correctamente`);
-      if (url.includes("/api/cms/products")) {
-        invalidateCmsCache("products");
+
+    try {
+      const res = await fetch(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        body: JSON.stringify(data),
+      });
+
+      if (res.ok) {
+        setSaveState("success");
+        setStatus(`${label} guardado correctamente`);
+        if (url.includes("/api/cms/products")) {
+          invalidateCmsCache("products");
+        }
+        if (url.includes("/api/cms/hotspots")) {
+          invalidateCmsCache(`hotspots:${selectedVehicle}`);
+        }
+        window.setTimeout(() => setSaveState("idle"), 2500);
+        return;
       }
-      if (url.includes("/api/cms/hotspots")) {
-        invalidateCmsCache(`hotspots:${selectedVehicle}`);
-      }
-    } else {
+
       const err = await res.json();
+      setSaveState("error");
       setStatus(err.error ?? `Error al guardar ${label}`);
+      window.setTimeout(() => setSaveState("idle"), 2500);
+    } catch {
+      setSaveState("error");
+      setStatus(`Error al guardar ${label}`);
+      window.setTimeout(() => setSaveState("idle"), 2500);
     }
   };
 
@@ -184,7 +201,17 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         </nav>
 
         {status && (
-          <p className="mb-4 rounded-lg bg-blue-50 px-4 py-2 text-sm text-[#1a3a5c]">{status}</p>
+          <p
+            className={`mb-4 rounded-lg px-4 py-2 text-sm ${
+              saveState === "success"
+                ? "bg-green-50 text-green-800"
+                : saveState === "error"
+                  ? "bg-red-50 text-red-700"
+                  : "bg-blue-50 text-[#1a3a5c]"
+            }`}
+          >
+            {status}
+          </p>
         )}
 
         {tab === "products" && (
@@ -266,8 +293,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 />
               </div>
             ))}
-            <button
-              type="button"
+            <SaveButton
+              saveState={saveState}
               onClick={() => {
                 const sanitized = products.map((product) => ({
                   ...product,
@@ -280,10 +307,9 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 setProducts(sanitized);
                 void save("/api/cms/products", sanitized, "Equipos");
               }}
-              className="rounded-xl bg-[#1e88e5] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#1565c0]"
             >
               Guardar equipos
-            </button>
+            </SaveButton>
 
             <ProductAddModal
               open={productModalOpen}
@@ -418,8 +444,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
               </div>
             ))}
 
-            <button
-              type="button"
+            <SaveButton
+              saveState={saveState}
               onClick={() =>
                 save(
                   `/api/cms/hotspots?vehicleId=${selectedVehicle}`,
@@ -427,10 +453,9 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   "Puntos 3D"
                 )
               }
-              className="rounded-xl bg-[#1e88e5] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#1565c0]"
             >
               Guardar puntos 3D
-            </button>
+            </SaveButton>
           </section>
         )}
 
@@ -464,13 +489,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 </div>
               </div>
             ))}
-            <button
-              type="button"
+            <SaveButton
+              saveState={saveState}
               onClick={() => save("/api/cms/vehicles", vehicles, "Unidades")}
-              className="rounded-xl bg-[#1e88e5] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#1565c0]"
             >
               Guardar unidades
-            </button>
+            </SaveButton>
           </section>
         )}
 
@@ -570,17 +594,44 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 {quoteConfig.quoteFooter}
               </div>
             </div>
-            <button
-              type="button"
+            <SaveButton
+              saveState={saveState}
               onClick={() => save("/api/cms/quote-config", quoteConfig, "Cotización")}
-              className="rounded-xl bg-[#1e88e5] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#1565c0]"
             >
               Guardar cotización
-            </button>
+            </SaveButton>
           </section>
         )}
       </div>
     </div>
+  );
+}
+
+function SaveButton({
+  children,
+  onClick,
+  saveState,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  saveState: "idle" | "saving" | "success" | "error";
+}) {
+  const colorClass =
+    saveState === "success"
+      ? "bg-[#2e7d32] hover:bg-[#1b5e20]"
+      : saveState === "error"
+        ? "bg-[#c62828] hover:bg-[#b71c1c]"
+        : "bg-[#1e88e5] hover:bg-[#1565c0]";
+
+  return (
+    <button
+      type="button"
+      disabled={saveState === "saving"}
+      onClick={onClick}
+      className={`cursor-pointer rounded-xl px-6 py-2.5 text-sm font-semibold text-white transition-colors duration-200 disabled:cursor-wait disabled:opacity-70 ${colorClass}`}
+    >
+      {saveState === "saving" ? "Guardando…" : children}
+    </button>
   );
 }
 
