@@ -10,6 +10,17 @@ function readEnv(name: string) {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
 }
 
+function parseRepoSlug(value: string | undefined) {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) return null;
+  return {
+    owner: trimmed.slice(0, slash),
+    repo: trimmed.slice(slash + 1),
+  };
+}
+
 export function canUseGitHubStorage() {
   return getGitHubConfig() !== null;
 }
@@ -18,9 +29,17 @@ export function getGitHubConfig(): GitHubRepoConfig | null {
   const token = readEnv("GITHUB_TOKEN") ?? readEnv("GH_TOKEN");
   if (!token) return null;
 
+  const fromSlug = parseRepoSlug(readEnv("GITHUB_REPO"));
+
   const owner =
-    readEnv("GITHUB_REPO_OWNER") ?? readEnv("VERCEL_GIT_REPO_OWNER");
-  const repo = readEnv("GITHUB_REPO") ?? readEnv("VERCEL_GIT_REPO_SLUG");
+    readEnv("GITHUB_REPO_OWNER") ??
+    readEnv("VERCEL_GIT_REPO_OWNER") ??
+    fromSlug?.owner;
+  const repo =
+    readEnv("GITHUB_REPO_NAME") ??
+    fromSlug?.repo ??
+    readEnv("VERCEL_GIT_REPO_SLUG");
+
   const branch =
     readEnv("GITHUB_BRANCH") ??
     readEnv("VERCEL_GIT_COMMIT_REF") ??
@@ -37,6 +56,21 @@ const githubHeaders = (token: string) => ({
   "X-GitHub-Api-Version": "2022-11-28",
 });
 
+async function readGitHubRawJson<T>(
+  config: GitHubRepoConfig,
+  repoPath: string
+): Promise<T | null> {
+  const url = `https://raw.githubusercontent.com/${config.owner}/${config.repo}/${config.branch}/${repoPath}`;
+
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function readGitHubJson<T>(repoPath: string): Promise<T | null> {
   const config = getGitHubConfig();
   if (!config) return null;
@@ -52,8 +86,12 @@ export async function readGitHubJson<T>(repoPath: string): Promise<T | null> {
       cache: "no-store",
     });
 
-    if (res.status === 404) return null;
-    if (!res.ok) return null;
+    if (res.status === 404) {
+      return readGitHubRawJson<T>(config, repoPath);
+    }
+    if (!res.ok) {
+      return readGitHubRawJson<T>(config, repoPath);
+    }
 
     const payload = (await res.json()) as { content?: string };
     if (!payload.content) return null;
@@ -63,8 +101,28 @@ export async function readGitHubJson<T>(repoPath: string): Promise<T | null> {
     );
     return JSON.parse(text) as T;
   } catch {
-    return null;
+    return readGitHubRawJson<T>(config, repoPath);
   }
+}
+
+async function fetchExistingSha(
+  config: GitHubRepoConfig,
+  repoPath: string
+): Promise<string | undefined> {
+  const getUrl = new URL(
+    `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${repoPath}`
+  );
+  getUrl.searchParams.set("ref", config.branch);
+
+  const existing = await fetch(getUrl, {
+    headers: githubHeaders(config.token),
+    cache: "no-store",
+  });
+
+  if (!existing.ok) return undefined;
+
+  const meta = (await existing.json()) as { sha?: string };
+  return meta.sha;
 }
 
 export async function writeGitHubJson(
@@ -77,29 +135,16 @@ export async function writeGitHubJson(
     throw new Error("GitHub token no configurado");
   }
 
-  const getUrl = new URL(
-    `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${repoPath}`
-  );
-  getUrl.searchParams.set("ref", config.branch);
-
-  let sha: string | undefined;
-  const existing = await fetch(getUrl, {
-    headers: githubHeaders(config.token),
-    cache: "no-store",
-  });
-
-  if (existing.ok) {
-    const meta = (await existing.json()) as { sha?: string };
-    sha = meta.sha;
-  }
-
   const content = Buffer.from(JSON.stringify(data, null, 2), "utf-8").toString(
     "base64"
   );
 
-  const putRes = await fetch(
-    `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${repoPath}`,
-    {
+  const putUrl = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${repoPath}`;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const sha = await fetchExistingSha(config, repoPath);
+
+    const putRes = await fetch(putUrl, {
       method: "PUT",
       headers: {
         ...githubHeaders(config.token),
@@ -112,11 +157,14 @@ export async function writeGitHubJson(
         branch: config.branch,
       }),
       cache: "no-store",
-    }
-  );
+    });
 
-  if (!putRes.ok) {
+    if (putRes.ok) return;
+
     const detail = await putRes.text();
+    const isShaConflict = putRes.status === 409 || detail.includes("does not match");
+    if (isShaConflict && attempt === 0) continue;
+
     throw new Error(detail || "No se pudo guardar en GitHub");
   }
 }

@@ -3,6 +3,12 @@ import { readHotspots, writeHotspots } from "@/lib/cms/store";
 import { requireAdmin } from "@/lib/auth";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const NO_CACHE_HEADERS = {
+  "Cache-Control": "private, no-store, no-cache, must-revalidate",
+  Pragma: "no-cache",
+};
 
 export async function GET(request: Request) {
   try {
@@ -12,7 +18,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "vehicleId requerido" }, { status: 400 });
     }
     const data = await readHotspots(vehicleId);
-    return NextResponse.json(data);
+    return NextResponse.json(data, { headers: NO_CACHE_HEADERS });
   } catch {
     return NextResponse.json({ error: "No se pudieron cargar los hotspots" }, { status: 500 });
   }
@@ -28,7 +34,7 @@ export async function PUT(request: Request) {
     }
     const data = await request.json();
     await writeHotspots(vehicleId, data);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true }, { headers: NO_CACHE_HEADERS });
   } catch (error) {
     if (error instanceof Error && error.message === "UNAUTHORIZED") {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
