@@ -5,20 +5,19 @@ interface GitHubRepoConfig {
   token: string;
 }
 
+let resolvedDefaultBranch: string | null = null;
+
 function readEnv(name: string) {
   const value = process.env[name];
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
 }
 
-function parseRepoSlug(value: string | undefined) {
-  if (!value) return null;
-  const trimmed = value.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash === trimmed.length - 1) return null;
-  return {
-    owner: trimmed.slice(0, slash),
-    repo: trimmed.slice(slash + 1),
-  };
+export function getRepoIdentity(): { owner: string; repo: string } | null {
+  const owner =
+    readEnv("GITHUB_REPO_OWNER") ?? readEnv("VERCEL_GIT_REPO_OWNER");
+  const repo = readEnv("GITHUB_REPO") ?? readEnv("VERCEL_GIT_REPO_SLUG");
+  if (!owner || !repo) return null;
+  return { owner, repo };
 }
 
 export function canUseGitHubStorage() {
@@ -29,25 +28,51 @@ export function getGitHubConfig(): GitHubRepoConfig | null {
   const token = readEnv("GITHUB_TOKEN") ?? readEnv("GH_TOKEN");
   if (!token) return null;
 
-  const fromSlug = parseRepoSlug(readEnv("GITHUB_REPO"));
+  const identity = getRepoIdentity();
+  if (!identity) return null;
 
-  const owner =
-    readEnv("GITHUB_REPO_OWNER") ??
-    readEnv("VERCEL_GIT_REPO_OWNER") ??
-    fromSlug?.owner;
-  const repo =
-    readEnv("GITHUB_REPO_NAME") ??
-    fromSlug?.repo ??
-    readEnv("VERCEL_GIT_REPO_SLUG");
+  return {
+    ...identity,
+    branch: readEnv("GITHUB_BRANCH") ?? "main",
+    token,
+  };
+}
 
-  const branch =
-    readEnv("GITHUB_BRANCH") ??
-    readEnv("VERCEL_GIT_COMMIT_REF") ??
-    "main";
+async function resolveDefaultBranch(config: GitHubRepoConfig): Promise<string> {
+  if (readEnv("GITHUB_BRANCH")) {
+    return config.branch;
+  }
 
-  if (!owner || !repo) return null;
+  if (resolvedDefaultBranch) {
+    return resolvedDefaultBranch;
+  }
 
-  return { owner, repo, branch, token };
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${config.owner}/${config.repo}`,
+      {
+        headers: githubHeaders(config.token),
+        cache: "no-store",
+      }
+    );
+
+    if (res.ok) {
+      const meta = (await res.json()) as { default_branch?: string };
+      if (meta.default_branch) {
+        resolvedDefaultBranch = meta.default_branch;
+        return meta.default_branch;
+      }
+    }
+  } catch {
+    // Fall back to configured branch.
+  }
+
+  resolvedDefaultBranch = config.branch;
+  return config.branch;
+}
+
+async function getBranch(config: GitHubRepoConfig) {
+  return resolveDefaultBranch(config);
 }
 
 const githubHeaders = (token: string) => ({
@@ -56,14 +81,19 @@ const githubHeaders = (token: string) => ({
   "X-GitHub-Api-Version": "2022-11-28",
 });
 
-async function readGitHubRawJson<T>(
-  config: GitHubRepoConfig,
+async function readRawGitHubJson<T>(
+  owner: string,
+  repo: string,
+  branch: string,
   repoPath: string
 ): Promise<T | null> {
-  const url = `https://raw.githubusercontent.com/${config.owner}/${config.repo}/${config.branch}/${repoPath}`;
+  const url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${repoPath}`;
 
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -71,14 +101,24 @@ async function readGitHubRawJson<T>(
   }
 }
 
+export async function readPublicGitHubJson<T>(repoPath: string): Promise<T | null> {
+  const identity = getRepoIdentity();
+  if (!identity) return null;
+
+  const branch = readEnv("GITHUB_BRANCH") ?? "main";
+  return readRawGitHubJson<T>(identity.owner, identity.repo, branch, repoPath);
+}
+
 export async function readGitHubJson<T>(repoPath: string): Promise<T | null> {
   const config = getGitHubConfig();
-  if (!config) return null;
+  if (!config) return readPublicGitHubJson<T>(repoPath);
+
+  const branch = await getBranch(config);
 
   const url = new URL(
     `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${repoPath}`
   );
-  url.searchParams.set("ref", config.branch);
+  url.searchParams.set("ref", branch);
 
   try {
     const res = await fetch(url, {
@@ -87,10 +127,10 @@ export async function readGitHubJson<T>(repoPath: string): Promise<T | null> {
     });
 
     if (res.status === 404) {
-      return readGitHubRawJson<T>(config, repoPath);
+      return readRawGitHubJson<T>(config.owner, config.repo, branch, repoPath);
     }
     if (!res.ok) {
-      return readGitHubRawJson<T>(config, repoPath);
+      return readRawGitHubJson<T>(config.owner, config.repo, branch, repoPath);
     }
 
     const payload = (await res.json()) as { content?: string };
@@ -101,28 +141,52 @@ export async function readGitHubJson<T>(repoPath: string): Promise<T | null> {
     );
     return JSON.parse(text) as T;
   } catch {
-    return readGitHubRawJson<T>(config, repoPath);
+    return readRawGitHubJson<T>(config.owner, config.repo, branch, repoPath);
   }
 }
 
-async function fetchExistingSha(
+async function dispatchCmsWorkflow(
   config: GitHubRepoConfig,
-  repoPath: string
-): Promise<string | undefined> {
-  const getUrl = new URL(
-    `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${repoPath}`
+  repoPath: string,
+  data: unknown
+) {
+  const content_b64 = Buffer.from(JSON.stringify(data, null, 2), "utf-8").toString(
+    "base64"
   );
-  getUrl.searchParams.set("ref", config.branch);
 
-  const existing = await fetch(getUrl, {
-    headers: githubHeaders(config.token),
-    cache: "no-store",
-  });
+  const res = await fetch(
+    `https://api.github.com/repos/${config.owner}/${config.repo}/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        ...githubHeaders(config.token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        event_type: "cms-update",
+        client_payload: {
+          path: repoPath,
+          content_b64,
+        },
+      }),
+      cache: "no-store",
+    }
+  );
 
-  if (!existing.ok) return undefined;
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || "No se pudo encolar la actualización del CMS en GitHub");
+  }
 
-  const meta = (await existing.json()) as { sha?: string };
-  return meta.sha;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+    const verify = await readGitHubJson<unknown>(repoPath);
+    if (verify !== null) return;
+  }
+
+  throw new Error(
+    "La actualización del CMS fue enviada a GitHub Actions pero no pudo verificarse a tiempo"
+  );
 }
 
 export async function writeGitHubJson(
@@ -135,16 +199,31 @@ export async function writeGitHubJson(
     throw new Error("GitHub token no configurado");
   }
 
+  const branch = await getBranch(config);
+
+  const getUrl = new URL(
+    `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${repoPath}`
+  );
+  getUrl.searchParams.set("ref", branch);
+
+  let sha: string | undefined;
+  const existing = await fetch(getUrl, {
+    headers: githubHeaders(config.token),
+    cache: "no-store",
+  });
+
+  if (existing.ok) {
+    const meta = (await existing.json()) as { sha?: string };
+    sha = meta.sha;
+  }
+
   const content = Buffer.from(JSON.stringify(data, null, 2), "utf-8").toString(
     "base64"
   );
 
-  const putUrl = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${repoPath}`;
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const sha = await fetchExistingSha(config, repoPath);
-
-    const putRes = await fetch(putUrl, {
+  const putRes = await fetch(
+    `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${repoPath}`,
+    {
       method: "PUT",
       headers: {
         ...githubHeaders(config.token),
@@ -154,17 +233,32 @@ export async function writeGitHubJson(
         message,
         content,
         sha,
-        branch: config.branch,
+        branch,
       }),
       cache: "no-store",
-    });
+    }
+  );
 
-    if (putRes.ok) return;
-
+  if (!putRes.ok) {
     const detail = await putRes.text();
-    const isShaConflict = putRes.status === 409 || detail.includes("does not match");
-    if (isShaConflict && attempt === 0) continue;
+    const needsWorkflow =
+      putRes.status === 403 ||
+      detail.includes("Resource not accessible") ||
+      detail.includes("must have push access");
+
+    if (needsWorkflow) {
+      await dispatchCmsWorkflow(config, repoPath, data);
+      return;
+    }
 
     throw new Error(detail || "No se pudo guardar en GitHub");
   }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const verify = await readGitHubJson<unknown>(repoPath);
+    if (verify !== null) return;
+    await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+  }
+
+  throw new Error("El archivo JSON no pudo verificarse después de guardar en GitHub");
 }

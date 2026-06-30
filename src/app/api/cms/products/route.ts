@@ -5,15 +5,14 @@ import { requireAdmin } from "@/lib/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const NO_CACHE_HEADERS = {
-  "Cache-Control": "private, no-store, no-cache, must-revalidate",
-  Pragma: "no-cache",
+const noStoreHeaders = {
+  "Cache-Control": "no-store, no-cache, must-revalidate",
 };
 
 export async function GET() {
   try {
     const data = await readProducts();
-    return NextResponse.json(data, { headers: NO_CACHE_HEADERS });
+    return NextResponse.json(data, { headers: noStoreHeaders });
   } catch {
     return NextResponse.json({ error: "No se pudieron cargar los productos" }, { status: 500 });
   }
@@ -27,7 +26,7 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: "Formato inválido" }, { status: 400 });
     }
     await writeProducts(data);
-    return NextResponse.json({ ok: true }, { headers: NO_CACHE_HEADERS });
+    return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[cms/products]", error);
     if (error instanceof Error && error.message === "UNAUTHORIZED") {

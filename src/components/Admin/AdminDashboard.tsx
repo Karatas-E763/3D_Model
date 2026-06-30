@@ -55,11 +55,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     void (async () => {
       setLoading(true);
       try {
+        const fetchOpts = { cache: "no-store" as RequestCache };
         const [pRes, vRes, qRes, hRes] = await Promise.all([
-          fetch("/api/cms/products"),
-          fetch("/api/cms/vehicles"),
-          fetch("/api/cms/quote-config"),
-          fetch(`/api/cms/hotspots?vehicleId=${selectedVehicle}`),
+          fetch("/api/cms/products", fetchOpts),
+          fetch("/api/cms/vehicles", fetchOpts),
+          fetch("/api/cms/quote-config", fetchOpts),
+          fetch(`/api/cms/hotspots?vehicleId=${selectedVehicle}`, fetchOpts),
         ]);
         if (!active) return;
         if (pRes.ok) setProducts(await pRes.json());
@@ -99,6 +100,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         setStatus(`${label} guardado correctamente`);
         if (url.includes("/api/cms/products")) {
           invalidateCmsCache("products");
+        }
+        if (url.includes("/api/cms/vehicles")) {
+          invalidateCmsCache("vehicles");
+        }
+        if (url.includes("/api/cms/quote-config")) {
+          invalidateCmsCache("quote-config");
         }
         if (url.includes("/api/cms/hotspots")) {
           invalidateCmsCache(`hotspots:${selectedVehicle}`);

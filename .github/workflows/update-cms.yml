@@ -1,0 +1,30 @@
+name: Update CMS JSON
+
+on:
+  repository_dispatch:
+    types: [cms-update]
+
+jobs:
+  commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write CMS JSON file
+        env:
+          FILE_PATH: ${{ github.event.client_payload.path }}
+          CONTENT_B64: ${{ github.event.client_payload.content_b64 }}
+        run: |
+          if [ -z "$FILE_PATH" ] || [ -z "$CONTENT_B64" ]; then
+            echo "Missing path or content"
+            exit 1
+          fi
+          mkdir -p "$(dirname "$FILE_PATH")"
+          echo "$CONTENT_B64" | base64 -d > "$FILE_PATH"
+
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(cms): update ${{ github.event.client_payload.path }}"
+          file_pattern: data/cms/**
