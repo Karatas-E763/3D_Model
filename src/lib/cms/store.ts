@@ -1,10 +1,15 @@
 import fs from "fs/promises";
 import path from "path";
 import {
+  CMS_REPO_PATHS,
   getCmsPaths,
-  getDeployedCmsPaths,
   SEED_PATHS,
 } from "./paths";
+import {
+  canUseRemoteCmsStorage,
+  readRemoteCmsJson,
+  writeRemoteCmsJson,
+} from "./remote-store";
 import productsSeed from "@/data/products/products.json";
 import vehiclesSeed from "@/data/vehicles/vehicles.json";
 import quoteConfigSeed from "@/data/quote-config.json";
@@ -43,8 +48,8 @@ function memoryStore(): CmsMemory {
   return globalForCms.__directtrackCmsMemory;
 }
 
-function memoryKey(filePath: string) {
-  return filePath.replace(/\\/g, "/");
+function isVercel() {
+  return process.env.VERCEL === "1";
 }
 
 async function ensureDir(dir: string) {
@@ -60,38 +65,38 @@ async function fileExists(filePath: string) {
   }
 }
 
-async function readFileIfExists(filePath: string) {
+async function readLocalJsonFile<T>(filePath: string): Promise<T | null> {
   if (!(await fileExists(filePath))) return null;
-  return fs.readFile(filePath, "utf-8");
+  const content = await fs.readFile(filePath, "utf-8");
+  return JSON.parse(content) as T;
 }
 
-async function writeJsonFile(filePath: string, data: unknown) {
+async function writeLocalJsonFile(filePath: string, data: unknown) {
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
-  memoryStore().set(memoryKey(filePath), data);
 }
 
-async function seedFile(cmsPath: string, seedPath: string) {
+async function seedLocalFile(cmsPath: string, seedPath: string, fallback: unknown) {
   if (await fileExists(cmsPath)) return;
-  const seedContent = await readFileIfExists(seedPath);
-  if (seedContent) {
-    await writeJsonFile(cmsPath, JSON.parse(seedContent) as unknown);
+
+  const seedContent = await readLocalJsonFile<unknown>(seedPath);
+  if (seedContent !== null) {
+    await writeLocalJsonFile(cmsPath, seedContent);
     return;
   }
+
+  await writeLocalJsonFile(cmsPath, fallback);
 }
 
-async function seedFromFallback(cmsPath: string, fallback: unknown) {
-  if (await fileExists(cmsPath)) return;
-  await writeJsonFile(cmsPath, fallback);
-}
-
-async function seedHotspots(cmsHotspotsDir: string) {
+async function seedHotspotsLocal(cmsHotspotsDir: string) {
   await ensureDir(cmsHotspotsDir);
 
-  if (process.env.VERCEL === "1") {
+  if (isVercel()) {
     for (const [vehicleId, data] of Object.entries(HOTSPOT_SEEDS)) {
       const cmsFile = path.join(cmsHotspotsDir, `${vehicleId}.json`);
-      await seedFromFallback(cmsFile, data);
+      if (!(await fileExists(cmsFile))) {
+        await writeLocalJsonFile(cmsFile, data);
+      }
     }
     return;
   }
@@ -100,101 +105,111 @@ async function seedHotspots(cmsHotspotsDir: string) {
   for (const file of seedFiles) {
     if (!file.endsWith(".json")) continue;
     const cmsFile = path.join(cmsHotspotsDir, file);
-    await seedFile(cmsFile, path.join(SEED_PATHS.hotspotsDir, file));
-  }
-}
-
-async function seedFromDeployedCopy(cmsPath: string, deployedPath: string) {
-  if (await fileExists(cmsPath)) return;
-  const deployedContent = await readFileIfExists(deployedPath);
-  if (deployedContent) {
-    await writeJsonFile(cmsPath, JSON.parse(deployedContent) as unknown);
+    await seedLocalFile(
+      cmsFile,
+      path.join(SEED_PATHS.hotspotsDir, file),
+      HOTSPOT_SEEDS[file.replace(".json", "")] ?? { hotspots: [] }
+    );
   }
 }
 
 export async function ensureCMS() {
+  if (isVercel() && canUseRemoteCmsStorage()) return;
+
   const cms = getCmsPaths();
-  const deployed = getDeployedCmsPaths();
-
-  if (process.env.VERCEL === "1") {
-    await seedFromDeployedCopy(cms.products, deployed.products);
-    await seedFromDeployedCopy(cms.vehicles, deployed.vehicles);
-    await seedFromDeployedCopy(cms.quoteConfig, deployed.quoteConfig);
-
-    await seedFromFallback(cms.products, productsSeed);
-    await seedFromFallback(cms.vehicles, vehiclesSeed);
-    await seedFromFallback(cms.quoteConfig, quoteConfigSeed);
-    await seedHotspots(cms.hotspotsDir);
-    return;
-  }
-
-  await seedFile(cms.products, SEED_PATHS.products);
-  await seedFile(cms.vehicles, SEED_PATHS.vehicles);
-  await seedFile(cms.quoteConfig, SEED_PATHS.quoteConfig);
-  await seedHotspots(cms.hotspotsDir);
+  await seedLocalFile(cms.products, SEED_PATHS.products, productsSeed);
+  await seedLocalFile(cms.vehicles, SEED_PATHS.vehicles, vehiclesSeed);
+  await seedLocalFile(cms.quoteConfig, SEED_PATHS.quoteConfig, quoteConfigSeed);
+  await seedHotspotsLocal(cms.hotspotsDir);
 }
 
-export async function readCMS<T>(filePath: string, fallback: T): Promise<T> {
-  const key = memoryKey(filePath);
-  const cached = memoryStore().get(key);
+async function readCMS<T>(repoPath: string, localPath: string, fallback: T): Promise<T> {
+  const cacheKey = repoPath;
+  const cached = memoryStore().get(cacheKey);
   if (cached !== undefined) return cached as T;
+
+  if (isVercel()) {
+    const remote = await readRemoteCmsJson<T>(repoPath);
+    if (remote !== null) {
+      memoryStore().set(cacheKey, remote);
+      return remote;
+    }
+  }
 
   await ensureCMS();
 
-  const content = await readFileIfExists(filePath);
-  if (content) {
-    const parsed = JSON.parse(content) as T;
-    memoryStore().set(key, parsed);
-    return parsed;
+  const local = await readLocalJsonFile<T>(localPath);
+  if (local !== null) {
+    memoryStore().set(cacheKey, local);
+    return local;
   }
 
   return fallback;
 }
 
-export async function writeCMS(filePath: string, data: unknown) {
-  await writeJsonFile(filePath, data);
+async function writeCMS(repoPath: string, localPath: string, data: unknown) {
+  memoryStore().set(repoPath, data);
+
+  if (isVercel()) {
+    await writeRemoteCmsJson(repoPath, data);
+    try {
+      await writeLocalJsonFile(localPath, data);
+    } catch {
+      // Deployed filesystem is read-only on Vercel; remote store is authoritative.
+    }
+    return;
+  }
+
+  await writeLocalJsonFile(localPath, data);
 }
 
 export async function readProducts() {
   const cms = getCmsPaths();
-  return readCMS<unknown[]>(cms.products, productsSeed);
+  return readCMS<unknown[]>(CMS_REPO_PATHS.products, cms.products, productsSeed);
 }
 
 export async function writeProducts(data: unknown[]) {
   const cms = getCmsPaths();
-  await writeCMS(cms.products, data);
+  await writeCMS(CMS_REPO_PATHS.products, cms.products, data);
 }
 
 export async function readVehicles() {
   const cms = getCmsPaths();
-  return readCMS<unknown[]>(cms.vehicles, vehiclesSeed);
+  return readCMS<unknown[]>(CMS_REPO_PATHS.vehicles, cms.vehicles, vehiclesSeed);
 }
 
 export async function writeVehicles(data: unknown[]) {
   const cms = getCmsPaths();
-  await writeCMS(cms.vehicles, data);
+  await writeCMS(CMS_REPO_PATHS.vehicles, cms.vehicles, data);
 }
 
 export async function readQuoteConfig() {
   const cms = getCmsPaths();
-  return readCMS<Record<string, unknown>>(cms.quoteConfig, quoteConfigSeed);
+  return readCMS<Record<string, unknown>>(
+    CMS_REPO_PATHS.quoteConfig,
+    cms.quoteConfig,
+    quoteConfigSeed
+  );
 }
 
 export async function writeQuoteConfig(data: Record<string, unknown>) {
   const cms = getCmsPaths();
-  await writeCMS(cms.quoteConfig, data);
+  await writeCMS(CMS_REPO_PATHS.quoteConfig, cms.quoteConfig, data);
 }
 
 export async function readHotspots(vehicleId: string) {
   const cms = getCmsPaths();
-  const filePath = path.join(cms.hotspotsDir, `${vehicleId}.json`);
+  const repoPath = CMS_REPO_PATHS.hotspot(vehicleId);
+  const localPath = path.join(cms.hotspotsDir, `${vehicleId}.json`);
   const fallback = HOTSPOT_SEEDS[vehicleId] ?? { hotspots: [] };
-  return readCMS<{ hotspots: unknown[] }>(filePath, fallback);
+  return readCMS<{ hotspots: unknown[] }>(repoPath, localPath, fallback);
 }
 
 export async function writeHotspots(vehicleId: string, data: { hotspots: unknown[] }) {
   const cms = getCmsPaths();
-  await writeCMS(path.join(cms.hotspotsDir, `${vehicleId}.json`), data);
+  const repoPath = CMS_REPO_PATHS.hotspot(vehicleId);
+  const localPath = path.join(cms.hotspotsDir, `${vehicleId}.json`);
+  await writeCMS(repoPath, localPath, data);
 }
 
 export async function listHotspotVehicles() {
