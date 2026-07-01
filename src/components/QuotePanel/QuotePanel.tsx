@@ -53,6 +53,8 @@ export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
     email: string;
     clientName: string;
   }) => {
+    if (sending) return;
+
     setSending(true);
     setEmailError(null);
     setEmailSuccess(null);

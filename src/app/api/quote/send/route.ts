@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { readProducts, readQuoteConfig } from "@/lib/cms/store";
-import { sendQuoteEmail } from "@/lib/email/sendQuoteEmail";
+import {
+  isEmailConfigured,
+  isValidEmail,
+  normalizeEmail,
+  sendQuoteEmail,
+} from "@/lib/email/sendQuoteEmail";
 import type { Product, QuoteConfig } from "@/types";
 import { generateQuotePdf } from "@/utils/quotePdf";
 
@@ -14,18 +19,35 @@ interface SendQuoteBody {
   quoteItems: { productId: string; quantity: number }[];
 }
 
+function errorResponse(message: string, status: number) {
+  return NextResponse.json({ ok: false, error: message }, { status });
+}
+
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as SendQuoteBody;
-    const { clientName, vehicleTitle, quoteItems } = body;
-    const email = body.email?.trim() ?? "";
-
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return NextResponse.json({ error: "Correo electrónico inválido" }, { status: 400 });
+    if (!isEmailConfigured()) {
+      return errorResponse(
+        "El envío por correo no está configurado en el servidor.",
+        503
+      );
     }
 
-    if (!quoteItems?.length) {
-      return NextResponse.json({ error: "La cotización está vacía" }, { status: 400 });
+    let body: SendQuoteBody;
+    try {
+      body = (await request.json()) as SendQuoteBody;
+    } catch {
+      return errorResponse("Solicitud inválida", 400);
+    }
+
+    const email = normalizeEmail(body.email ?? "");
+    const { clientName, vehicleTitle, quoteItems } = body;
+
+    if (!isValidEmail(email)) {
+      return errorResponse("Correo electrónico inválido", 400);
+    }
+
+    if (!Array.isArray(quoteItems) || quoteItems.length === 0) {
+      return errorResponse("La cotización está vacía", 400);
     }
 
     const [products, configRaw] = await Promise.all([readProducts(), readQuoteConfig()]);
@@ -40,7 +62,7 @@ export async function POST(request: Request) {
       .filter((item): item is { product: Product; quantity: number } => item !== null);
 
     if (!items.length) {
-      return NextResponse.json({ error: "No se encontraron productos válidos" }, { status: 400 });
+      return errorResponse("No se encontraron productos válidos", 400);
     }
 
     const pdfDoc = generateQuotePdf({
@@ -86,12 +108,25 @@ ${config.providerEmail}`;
       pdfFilename,
     });
 
-    return NextResponse.json({ ok: true, message: "Cotización enviada correctamente" });
+    return NextResponse.json({
+      ok: true,
+      message: "Cotización enviada correctamente",
+    });
   } catch (error) {
-    console.error("Error sending quote email:", error);
+    console.error("[quote/send]", error);
     const message =
       error instanceof Error ? error.message : "Error al enviar la cotización";
-    const status = message.includes("no está configurado") ? 503 : 500;
-    return NextResponse.json({ error: message }, { status });
+
+    if (message.includes("no está configurado") || message.includes("SMTP_FROM")) {
+      return errorResponse(message, 503);
+    }
+    if (message.includes("inválido")) {
+      return errorResponse(message, 400);
+    }
+    if (/conectar|Brevo SMTP|autenticación|remitente/i.test(message)) {
+      return errorResponse(message, 502);
+    }
+
+    return errorResponse(message, 500);
   }
 }

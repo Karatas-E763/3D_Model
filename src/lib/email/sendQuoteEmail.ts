@@ -2,6 +2,8 @@ import { loadEnvConfig } from "@next/env";
 import nodemailer from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function sanitizeEnv(value: string | undefined) {
   if (typeof value !== "string") return undefined;
   const cleaned = value.trim().replace(/^['"]|['"]$/g, "").replace(/\r/g, "");
@@ -12,19 +14,9 @@ function readMailEnv() {
   loadEnvConfig(process.cwd());
 }
 
-function getResendApiKey() {
-  readMailEnv();
-  return sanitizeEnv(process.env.RESEND_API_KEY);
-}
-
-function getResendFrom() {
-  readMailEnv();
-  return sanitizeEnv(process.env.RESEND_FROM) ?? sanitizeEnv(process.env.SMTP_FROM);
-}
-
 function getSmtpHost() {
   readMailEnv();
-  return sanitizeEnv(process.env.SMTP_HOST);
+  return sanitizeEnv(process.env.SMTP_HOST) ?? "smtp-relay.brevo.com";
 }
 
 function getSmtpUser() {
@@ -46,47 +38,71 @@ function isVercel() {
   return process.env.VERCEL === "1";
 }
 
+function missingEnvVars() {
+  const missing: string[] = [];
+  if (!getSmtpUser()) missing.push("SMTP_USER");
+  if (!getSmtpPass()) missing.push("SMTP_PASS");
+  if (!getSmtpFrom()) missing.push("SMTP_FROM");
+  return missing;
+}
+
 function notConfiguredMessage() {
+  const missing = missingEnvVars();
+  const vars = missing.length > 0 ? missing.join(", ") : "SMTP_USER, SMTP_PASS, SMTP_FROM";
+
   if (isVercel()) {
-    return "El envío por correo no está configurado. En Vercel, agregue SMTP_HOST, SMTP_USER y SMTP_PASS en Variables de entorno y vuelva a desplegar.";
+    return `El envío por correo no está configurado. En Vercel, agregue ${vars} en Variables de entorno y vuelva a desplegar.`;
   }
-  return "El envío por correo no está configurado. Agregue SMTP_HOST, SMTP_USER y SMTP_PASS en .env.local";
+  return `El envío por correo no está configurado. Agregue ${vars} en .env.local`;
 }
 
 function createSmtpTransporter(): nodemailer.Transporter | null {
-  const host = getSmtpHost();
   const user = getSmtpUser();
   const pass = getSmtpPass();
-  if (!host || !user || !pass) return null;
+  if (!user || !pass) return null;
 
   const port = Number(sanitizeEnv(process.env.SMTP_PORT) ?? 587);
   const secure = sanitizeEnv(process.env.SMTP_SECURE) === "true";
 
   return nodemailer.createTransport({
-    host,
+    host: getSmtpHost(),
     port,
     secure,
     requireTLS: !secure && port === 587,
-    auth: {
-      user,
-      pass,
-    },
+    auth: { user, pass },
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
     socketTimeout: 15_000,
   });
 }
 
-function smtpAuthErrorMessage(error: unknown) {
+function classifySmtpError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  if (!/535|authentication failed|invalid login/i.test(message)) {
-    return message;
+
+  if (/535|authentication failed|invalid login/i.test(message)) {
+    return "Error de autenticación con Brevo SMTP. Verifique SMTP_USER (login SMTP) y SMTP_PASS (clave SMTP de Transactional → SMTP & API).";
   }
-  return "Error de autenticación SMTP con Brevo. Verifique que SMTP_USER sea su correo de acceso a Brevo (o el login SMTP de Transactional → SMTP & API) y que SMTP_PASS sea la clave SMTP completa, no la contraseña de la cuenta ni la API key.";
+  if (/timeout|timed out|ETIMEDOUT|ECONNRESET|ENOTFOUND|ECONNREFUSED/i.test(message)) {
+    return "No se pudo conectar al servidor de correo Brevo. Intente de nuevo en unos momentos.";
+  }
+  if (/550|553|sender|from address|not verified/i.test(message)) {
+    return "El remitente no está verificado en Brevo. Verifique que SMTP_FROM coincida con un remitente autorizado.";
+  }
+
+  return message || "Error al enviar la cotización por correo";
+}
+
+export function isValidEmail(email: string) {
+  const normalized = email.trim().toLowerCase();
+  return normalized.length > 0 && EMAIL_PATTERN.test(normalized);
+}
+
+export function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
 }
 
 export function isEmailConfigured(): boolean {
-  return Boolean(getResendApiKey() || createSmtpTransporter());
+  return missingEnvVars().length === 0;
 }
 
 interface SendQuoteEmailInput {
@@ -99,54 +115,31 @@ interface SendQuoteEmailInput {
   pdfFilename: string;
 }
 
-async function sendViaResend(input: SendQuoteEmailInput): Promise<boolean> {
-  const apiKey = getResendApiKey();
-  if (!apiKey) return false;
+export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> {
+  readMailEnv();
 
-  const from =
-    getResendFrom() ?? `"${input.fromName}" <onboarding@resend.dev>`;
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from,
-      to: [input.to],
-      subject: input.subject,
-      text: input.text,
-      html: input.html,
-      attachments: [
-        {
-          filename: input.pdfFilename,
-          content: input.pdfBuffer.toString("base64"),
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { message?: string };
-    throw new Error(body.message ?? `Resend error (${response.status})`);
+  const recipient = normalizeEmail(input.to);
+  if (!isValidEmail(recipient)) {
+    throw new Error("Correo electrónico inválido");
   }
 
-  return true;
-}
-
-async function sendViaSmtp(input: SendQuoteEmailInput): Promise<boolean> {
-  const transporter = createSmtpTransporter();
-  if (!transporter) return false;
+  if (!isEmailConfigured()) {
+    throw new Error(notConfiguredMessage());
+  }
 
   const fromEmail = getSmtpFrom();
-  if (!fromEmail) {
-    throw new Error("SMTP_FROM no está configurado");
+  if (!fromEmail || !isValidEmail(fromEmail)) {
+    throw new Error("SMTP_FROM no está configurado o es inválido");
+  }
+
+  const transporter = createSmtpTransporter();
+  if (!transporter) {
+    throw new Error(notConfiguredMessage());
   }
 
   const mail: Mail.Options = {
     from: `"${input.fromName}" <${fromEmail}>`,
-    to: input.to,
+    to: recipient,
     subject: input.subject,
     text: input.text,
     html: input.html,
@@ -161,33 +154,9 @@ async function sendViaSmtp(input: SendQuoteEmailInput): Promise<boolean> {
 
   try {
     await transporter.sendMail(mail);
-    return true;
   } catch (error) {
-    throw new Error(smtpAuthErrorMessage(error));
+    throw new Error(classifySmtpError(error));
   } finally {
     transporter.close();
   }
-}
-
-export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> {
-  readMailEnv();
-
-  const recipient = input.to.trim();
-  if (!recipient) {
-    throw new Error("Correo electrónico inválido");
-  }
-
-  const payload = { ...input, to: recipient };
-
-  if (createSmtpTransporter()) {
-    const sent = await sendViaSmtp(payload);
-    if (sent) return;
-  }
-
-  if (getResendApiKey()) {
-    const sent = await sendViaResend(payload);
-    if (sent) return;
-  }
-
-  throw new Error(notConfiguredMessage());
 }
