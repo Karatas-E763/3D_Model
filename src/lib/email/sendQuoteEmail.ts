@@ -2,36 +2,44 @@ import { loadEnvConfig } from "@next/env";
 import nodemailer from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 
-loadEnvConfig(process.cwd());
+function sanitizeEnv(value: string | undefined) {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.trim().replace(/^['"]|['"]$/g, "").replace(/\r/g, "");
+  return cleaned !== "" ? cleaned : undefined;
+}
 
-let smtpTransporter: nodemailer.Transporter | null = null;
-
-function trimEnv(value: string | undefined) {
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+function readMailEnv() {
+  loadEnvConfig(process.cwd());
 }
 
 function getResendApiKey() {
-  return trimEnv(process.env.RESEND_API_KEY);
+  readMailEnv();
+  return sanitizeEnv(process.env.RESEND_API_KEY);
 }
 
 function getResendFrom() {
-  return trimEnv(process.env.RESEND_FROM) ?? trimEnv(process.env.SMTP_FROM);
+  readMailEnv();
+  return sanitizeEnv(process.env.RESEND_FROM) ?? sanitizeEnv(process.env.SMTP_FROM);
 }
 
 function getSmtpHost() {
-  return trimEnv(process.env.SMTP_HOST);
+  readMailEnv();
+  return sanitizeEnv(process.env.SMTP_HOST);
 }
 
 function getSmtpUser() {
-  return trimEnv(process.env.SMTP_USER);
+  readMailEnv();
+  return sanitizeEnv(process.env.SMTP_USER);
 }
 
 function getSmtpPass() {
-  return trimEnv(process.env.SMTP_PASS);
+  readMailEnv();
+  return sanitizeEnv(process.env.SMTP_PASS);
 }
 
 function getSmtpFrom() {
-  return trimEnv(process.env.SMTP_FROM) ?? getSmtpUser();
+  readMailEnv();
+  return sanitizeEnv(process.env.SMTP_FROM);
 }
 
 function isVercel() {
@@ -40,41 +48,45 @@ function isVercel() {
 
 function notConfiguredMessage() {
   if (isVercel()) {
-    return "El envío por correo no está configurado. En Vercel, agregue RESEND_API_KEY en Configuración del proyecto → Variables de entorno y vuelva a desplegar.";
+    return "El envío por correo no está configurado. En Vercel, agregue SMTP_HOST, SMTP_USER y SMTP_PASS en Variables de entorno y vuelva a desplegar.";
   }
-  return "El envío por correo no está configurado. Agregue RESEND_API_KEY o SMTP_HOST, SMTP_USER y SMTP_PASS en .env.local";
+  return "El envío por correo no está configurado. Agregue SMTP_HOST, SMTP_USER y SMTP_PASS en .env.local";
 }
 
-function getSmtpTransporter(): nodemailer.Transporter | null {
+function createSmtpTransporter(): nodemailer.Transporter | null {
   const host = getSmtpHost();
   const user = getSmtpUser();
   const pass = getSmtpPass();
   if (!host || !user || !pass) return null;
 
-  if (!smtpTransporter) {
-    const port = Number(trimEnv(process.env.SMTP_PORT) ?? 587);
-    const secure = trimEnv(process.env.SMTP_SECURE) === "true";
+  const port = Number(sanitizeEnv(process.env.SMTP_PORT) ?? 587);
+  const secure = sanitizeEnv(process.env.SMTP_SECURE) === "true";
 
-    smtpTransporter = nodemailer.createTransport({
-      ...(isVercel()
-        ? {}
-        : { pool: true, maxConnections: 3, maxMessages: 200 }),
-      host,
-      port,
-      secure,
-      requireTLS: !secure && port === 587,
-      auth: { user, pass },
-      connectionTimeout: 8_000,
-      greetingTimeout: 8_000,
-      socketTimeout: 12_000,
-    });
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    requireTLS: !secure && port === 587,
+    auth: {
+      user,
+      pass,
+    },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
+  });
+}
+
+function smtpAuthErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/535|authentication failed|invalid login/i.test(message)) {
+    return message;
   }
-
-  return smtpTransporter;
+  return "Error de autenticación SMTP con Brevo. Verifique que SMTP_USER sea su correo de acceso a Brevo (o el login SMTP de Transactional → SMTP & API) y que SMTP_PASS sea la clave SMTP completa, no la contraseña de la cuenta ni la API key.";
 }
 
 export function isEmailConfigured(): boolean {
-  return Boolean(getResendApiKey() || getSmtpTransporter());
+  return Boolean(getResendApiKey() || createSmtpTransporter());
 }
 
 interface SendQuoteEmailInput {
@@ -124,11 +136,13 @@ async function sendViaResend(input: SendQuoteEmailInput): Promise<boolean> {
 }
 
 async function sendViaSmtp(input: SendQuoteEmailInput): Promise<boolean> {
-  const transporter = getSmtpTransporter();
+  const transporter = createSmtpTransporter();
   if (!transporter) return false;
 
   const fromEmail = getSmtpFrom();
-  if (!fromEmail) return false;
+  if (!fromEmail) {
+    throw new Error("SMTP_FROM no está configurado");
+  }
 
   const mail: Mail.Options = {
     from: `"${input.fromName}" <${fromEmail}>`,
@@ -145,11 +159,19 @@ async function sendViaSmtp(input: SendQuoteEmailInput): Promise<boolean> {
     ],
   };
 
-  await transporter.sendMail(mail);
-  return true;
+  try {
+    await transporter.sendMail(mail);
+    return true;
+  } catch (error) {
+    throw new Error(smtpAuthErrorMessage(error));
+  } finally {
+    transporter.close();
+  }
 }
 
 export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> {
+  readMailEnv();
+
   const recipient = input.to.trim();
   if (!recipient) {
     throw new Error("Correo electrónico inválido");
@@ -157,7 +179,7 @@ export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> 
 
   const payload = { ...input, to: recipient };
 
-  if (getSmtpTransporter()) {
+  if (createSmtpTransporter()) {
     const sent = await sendViaSmtp(payload);
     if (sent) return;
   }
