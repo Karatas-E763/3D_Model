@@ -14,6 +14,11 @@ function readMailEnv() {
   loadEnvConfig(process.cwd());
 }
 
+function getBrevoApiKey() {
+  readMailEnv();
+  return sanitizeEnv(process.env.BREVO_API_KEY);
+}
+
 function getSmtpHost() {
   readMailEnv();
   return sanitizeEnv(process.env.SMTP_HOST) ?? "smtp-relay.brevo.com";
@@ -38,22 +43,19 @@ function isVercel() {
   return process.env.VERCEL === "1";
 }
 
-function missingEnvVars() {
-  const missing: string[] = [];
-  if (!getSmtpUser()) missing.push("SMTP_USER");
-  if (!getSmtpPass()) missing.push("SMTP_PASS");
-  if (!getSmtpFrom()) missing.push("SMTP_FROM");
-  return missing;
+function hasBrevoApiConfig() {
+  return Boolean(getBrevoApiKey() && getSmtpFrom());
+}
+
+function hasSmtpConfig() {
+  return Boolean(getSmtpUser() && getSmtpPass() && getSmtpFrom());
 }
 
 function notConfiguredMessage() {
-  const missing = missingEnvVars();
-  const vars = missing.length > 0 ? missing.join(", ") : "SMTP_USER, SMTP_PASS, SMTP_FROM";
-
   if (isVercel()) {
-    return `El envío por correo no está configurado. En Vercel, agregue ${vars} en Variables de entorno y vuelva a desplegar.`;
+    return "El envío por correo no está configurado. En Vercel, agregue BREVO_API_KEY y SMTP_FROM (o SMTP_USER, SMTP_PASS y SMTP_FROM) y vuelva a desplegar.";
   }
-  return `El envío por correo no está configurado. Agregue ${vars} en .env.local`;
+  return "El envío por correo no está configurado. Agregue BREVO_API_KEY y SMTP_FROM en .env.local";
 }
 
 function createSmtpTransporter(): nodemailer.Transporter | null {
@@ -76,14 +78,14 @@ function createSmtpTransporter(): nodemailer.Transporter | null {
   });
 }
 
-function classifySmtpError(error: unknown): string {
+function classifyMailError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
 
-  if (/535|authentication failed|invalid login/i.test(message)) {
-    return "Error de autenticación con Brevo SMTP. Verifique SMTP_USER (login SMTP) y SMTP_PASS (clave SMTP de Transactional → SMTP & API).";
+  if (/535|authentication failed|invalid login|unauthorized|401|403/i.test(message)) {
+    return "Error de autenticación con Brevo. Verifique BREVO_API_KEY o las credenciales SMTP en Transactional → SMTP & API.";
   }
   if (/timeout|timed out|ETIMEDOUT|ECONNRESET|ENOTFOUND|ECONNREFUSED/i.test(message)) {
-    return "No se pudo conectar al servidor de correo Brevo. Intente de nuevo en unos momentos.";
+    return "No se pudo conectar al servicio de correo Brevo. Intente de nuevo en unos momentos.";
   }
   if (/550|553|sender|from address|not verified/i.test(message)) {
     return "El remitente no está verificado en Brevo. Verifique que SMTP_FROM coincida con un remitente autorizado.";
@@ -102,7 +104,7 @@ export function normalizeEmail(email: string) {
 }
 
 export function isEmailConfigured(): boolean {
-  return missingEnvVars().length === 0;
+  return hasBrevoApiConfig() || hasSmtpConfig();
 }
 
 interface SendQuoteEmailInput {
@@ -113,6 +115,72 @@ interface SendQuoteEmailInput {
   fromName: string;
   pdfBuffer: Buffer;
   pdfFilename: string;
+}
+
+async function sendViaBrevoApi(input: SendQuoteEmailInput): Promise<boolean> {
+  const apiKey = getBrevoApiKey();
+  const fromEmail = getSmtpFrom();
+  if (!apiKey || !fromEmail) return false;
+
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "api-key": apiKey,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      sender: {
+        name: input.fromName,
+        email: fromEmail,
+      },
+      to: [{ email: input.to }],
+      subject: input.subject,
+      htmlContent: input.html,
+      textContent: input.text,
+      attachment: [
+        {
+          name: input.pdfFilename,
+          content: input.pdfBuffer.toString("base64"),
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { message?: string };
+    throw new Error(body.message ?? `Brevo API error (${response.status})`);
+  }
+
+  return true;
+}
+
+async function sendViaSmtp(input: SendQuoteEmailInput): Promise<boolean> {
+  const transporter = createSmtpTransporter();
+  const fromEmail = getSmtpFrom();
+  if (!transporter || !fromEmail) return false;
+
+  const mail: Mail.Options = {
+    from: `"${input.fromName}" <${fromEmail}>`,
+    to: input.to,
+    subject: input.subject,
+    text: input.text,
+    html: input.html,
+    attachments: [
+      {
+        filename: input.pdfFilename,
+        content: input.pdfBuffer,
+        contentType: "application/pdf",
+      },
+    ],
+  };
+
+  try {
+    await transporter.sendMail(mail);
+    return true;
+  } finally {
+    transporter.close();
+  }
 }
 
 export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> {
@@ -132,31 +200,21 @@ export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> 
     throw new Error("SMTP_FROM no está configurado o es inválido");
   }
 
-  const transporter = createSmtpTransporter();
-  if (!transporter) {
-    throw new Error(notConfiguredMessage());
-  }
-
-  const mail: Mail.Options = {
-    from: `"${input.fromName}" <${fromEmail}>`,
-    to: recipient,
-    subject: input.subject,
-    text: input.text,
-    html: input.html,
-    attachments: [
-      {
-        filename: input.pdfFilename,
-        content: input.pdfBuffer,
-        contentType: "application/pdf",
-      },
-    ],
-  };
+  const payload = { ...input, to: recipient };
 
   try {
-    await transporter.sendMail(mail);
+    if (hasBrevoApiConfig()) {
+      const sent = await sendViaBrevoApi(payload);
+      if (sent) return;
+    }
+
+    if (hasSmtpConfig()) {
+      const sent = await sendViaSmtp(payload);
+      if (sent) return;
+    }
+
+    throw new Error(notConfiguredMessage());
   } catch (error) {
-    throw new Error(classifySmtpError(error));
-  } finally {
-    transporter.close();
+    throw new Error(classifyMailError(error));
   }
 }
