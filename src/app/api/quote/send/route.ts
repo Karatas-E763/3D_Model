@@ -5,6 +5,7 @@ import type { Product, QuoteConfig } from "@/types";
 import { generateQuotePdf } from "@/utils/quotePdf";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 interface SendQuoteBody {
   email: string;
@@ -16,7 +17,8 @@ interface SendQuoteBody {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as SendQuoteBody;
-    const { email, clientName, vehicleTitle, quoteItems } = body;
+    const { clientName, vehicleTitle, quoteItems } = body;
+    const email = body.email?.trim() ?? "";
 
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return NextResponse.json({ error: "Correo electrónico inválido" }, { status: 400 });
