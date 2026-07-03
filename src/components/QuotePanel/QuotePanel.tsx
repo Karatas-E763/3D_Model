@@ -1,19 +1,19 @@
 "use client";
 
-import { useState } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { FaShoppingCart, FaFileAlt, FaDownload, FaTimes } from "react-icons/fa";
 import { useAppStore } from "@/store/useAppStore";
 import { useCMSProducts, useCMSQuoteConfig } from "@/hooks/useCMS";
 import { useQuoteTotals, formatPrice } from "@/hooks/useProducts";
-import QuoteEmailModal from "@/components/QuotePanel/QuoteEmailModal";
 
 interface QuotePanelProps {
   vehicleTitle?: string;
 }
 
 export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
+  const router = useRouter();
   const quoteItems = useAppStore((s) => s.quoteItems);
   const selectedProduct = useAppStore((s) => s.selectedProduct);
   const updateQuantity = useAppStore((s) => s.updateQuantity);
@@ -22,11 +22,6 @@ export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
   const { getProduct } = useCMSProducts();
   const { config } = useCMSQuoteConfig();
   const { subtotal, iva, total, itemCount } = useQuoteTotals();
-
-  const [emailModalOpen, setEmailModalOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [emailError, setEmailError] = useState<string | null>(null);
-  const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
 
   const buildLineItems = () =>
     quoteItems
@@ -41,46 +36,10 @@ export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
 
   const handleRequestQuote = () => {
     if (quoteItems.length === 0) return;
-    setEmailError(null);
-    setEmailSuccess(null);
-    setEmailModalOpen(true);
-  };
-
-  const handleSendEmail = async ({
-    email,
-    clientName,
-  }: {
-    email: string;
-    clientName: string;
-  }) => {
-    if (sending) return;
-
-    setSending(true);
-    setEmailError(null);
-    setEmailSuccess(null);
-    try {
-      const res = await fetch("/api/quote/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email,
-          clientName: clientName || undefined,
-          vehicleTitle,
-          quoteItems,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setEmailError(data.error ?? "Error al enviar la cotización");
-        return;
-      }
-      setEmailSuccess(data.message ?? "Cotización enviada correctamente");
-      setTimeout(() => setEmailModalOpen(false), 2000);
-    } catch {
-      setEmailError("Error de conexión al enviar la cotización");
-    } finally {
-      setSending(false);
-    }
+    const params = new URLSearchParams();
+    if (vehicleTitle) params.set("vehicle", vehicleTitle);
+    const query = params.toString();
+    router.push(query ? `/resend?${query}` : "/resend");
   };
 
   const handleDownloadQuotePDF = async () => {
@@ -95,8 +54,7 @@ export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
   };
 
   return (
-    <>
-      <motion.div
+    <motion.div
         initial={{ opacity: 0, x: 40 }}
         animate={{ opacity: 1, x: 0 }}
         exit={{ opacity: 0, x: 40 }}
@@ -268,15 +226,5 @@ export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
           </motion.button>
         </div>
       </motion.div>
-
-      <QuoteEmailModal
-        open={emailModalOpen}
-        onClose={() => setEmailModalOpen(false)}
-        onSend={handleSendEmail}
-        sending={sending}
-        error={emailError}
-        success={emailSuccess}
-      />
-    </>
   );
 }
