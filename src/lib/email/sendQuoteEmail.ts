@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const GMAIL_APP_PASSWORD_PATTERN = /^[a-z0-9]{16}$/i;
 
 function sanitizeEnv(value: string | undefined) {
   if (typeof value !== "string") return undefined;
@@ -65,6 +66,11 @@ function getFromEmail() {
   return getGmailUser() ?? sanitizeEnv(process.env.SMTP_FROM);
 }
 
+function getBrevoFromEmail() {
+  readMailEnv();
+  return sanitizeEnv(process.env.BREVO_FROM) ?? sanitizeEnv(process.env.SMTP_FROM) ?? getGmailUser();
+}
+
 function isVercel() {
   return process.env.VERCEL === "1";
 }
@@ -79,22 +85,97 @@ function hasGmailOAuthConfig() {
 }
 
 function hasGmailSmtpConfig() {
-  return Boolean(getGmailUser() && getGmailAppPassword());
+  const pass = getGmailAppPassword();
+  return Boolean(getGmailUser() && pass && GMAIL_APP_PASSWORD_PATTERN.test(pass));
 }
 
 function hasBrevoApiConfig() {
-  return Boolean(getBrevoApiKey() && getFromEmail());
+  return Boolean(getBrevoApiKey() && getBrevoFromEmail());
 }
 
 function hasBrevoSmtpConfig() {
-  return Boolean(getSmtpUser() && getSmtpPass() && getFromEmail());
+  return Boolean(getSmtpUser() && getSmtpPass() && getBrevoFromEmail());
 }
 
 function notConfiguredMessage() {
   if (isVercel()) {
-    return "El envío por correo no está configurado. En Vercel, agregue GMAIL_USER y GMAIL_APP_PASSWORD (o credenciales OAuth de Gmail) y vuelva a desplegar.";
+    return "El envío por correo no está configurado. En Vercel, configure GOOGLE_REFRESH_TOKEN (npm run gmail:oauth) o GMAIL_APP_PASSWORD de 16 caracteres.";
   }
-  return "El envío por correo no está configurado. Agregue GMAIL_USER y GMAIL_APP_PASSWORD en .env.local";
+  return "El envío por correo no está configurado. Ejecute npm run gmail:oauth o configure GMAIL_APP_PASSWORD de 16 caracteres.";
+}
+
+async function getGmailAccessToken(): Promise<string | null> {
+  const clientId = getGoogleClientId();
+  const clientSecret = getGoogleClientSecret();
+  const refreshToken = getGoogleRefreshToken();
+  if (!clientId || !clientSecret || !refreshToken) return null;
+
+  const oauth2Client = new OAuth2Client(clientId, clientSecret);
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  const accessTokenResponse = await oauth2Client.getAccessToken();
+  return accessTokenResponse.token ?? null;
+}
+
+function encodeMimeHeader(value: string) {
+  if (/^[\x20-\x7E]*$/.test(value)) return value;
+  return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
+}
+
+function buildMimeMessage(input: SendQuoteEmailInput, fromEmail: string): string {
+  const boundary = `directrack_${Date.now()}`;
+  const chunks = [
+    `From: "${input.fromName}" <${fromEmail}>`,
+    `To: ${input.to}`,
+    `Subject: ${encodeMimeHeader(input.subject)}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: multipart/alternative; boundary=\"alt\"",
+    "",
+    "--alt",
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    input.text,
+    "--alt",
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    input.html,
+    "--alt--",
+    `--${boundary}`,
+    "Content-Type: application/pdf; name=\"" + input.pdfFilename + "\"",
+    "Content-Transfer-Encoding: base64",
+    `Content-Disposition: attachment; filename="${input.pdfFilename}"`,
+    "",
+    input.pdfBuffer.toString("base64"),
+    `--${boundary}--`,
+  ];
+  return chunks.join("\r\n");
+}
+
+async function sendViaGmailApi(input: SendQuoteEmailInput): Promise<boolean> {
+  const fromEmail = getFromEmail();
+  const accessToken = await getGmailAccessToken();
+  if (!fromEmail || !accessToken) return false;
+
+  const raw = Buffer.from(buildMimeMessage(input, fromEmail)).toString("base64url");
+  const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ raw }),
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `Gmail API error (${response.status})`);
+  }
+
+  return true;
 }
 
 async function createGmailOAuthTransporter(): Promise<nodemailer.Transporter | null> {
@@ -104,10 +185,7 @@ async function createGmailOAuthTransporter(): Promise<nodemailer.Transporter | n
   const refreshToken = getGoogleRefreshToken();
   if (!user || !clientId || !clientSecret || !refreshToken) return null;
 
-  const oauth2Client = new OAuth2Client(clientId, clientSecret);
-  oauth2Client.setCredentials({ refresh_token: refreshToken });
-  const accessTokenResponse = await oauth2Client.getAccessToken();
-  const accessToken = accessTokenResponse.token;
+  const accessToken = await getGmailAccessToken();
   if (!accessToken) return null;
 
   return nodemailer.createTransport({
@@ -126,7 +204,7 @@ async function createGmailOAuthTransporter(): Promise<nodemailer.Transporter | n
 function createGmailSmtpTransporter(): nodemailer.Transporter | null {
   const user = getGmailUser();
   const pass = getGmailAppPassword();
-  if (!user || !pass) return null;
+  if (!user || !pass || !GMAIL_APP_PASSWORD_PATTERN.test(pass)) return null;
 
   return nodemailer.createTransport({
     host: "smtp.gmail.com",
@@ -160,11 +238,14 @@ function createBrevoSmtpTransporter(): nodemailer.Transporter | null {
   });
 }
 
-function classifyMailError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+function classifyMailError(errors: string[]): string {
+  const message = errors.join(" | ");
 
-  if (/535|authentication failed|invalid login|unauthorized|401|403/i.test(message)) {
-    return "Error de autenticación con Gmail. Verifique GMAIL_APP_PASSWORD o las credenciales OAuth (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN).";
+  if (/refresh_token|invalid_grant|GOOGLE_REFRESH_TOKEN/i.test(message)) {
+    return "Token OAuth de Gmail expirado o inválido. Ejecute npm run gmail:oauth y actualice GOOGLE_REFRESH_TOKEN.";
+  }
+  if (/535|534|authentication failed|invalid login|unauthorized|401|403/i.test(message)) {
+    return "Error de autenticación con Gmail. Ejecute npm run gmail:oauth para generar GOOGLE_REFRESH_TOKEN, o use una contraseña de aplicación de 16 caracteres en GMAIL_APP_PASSWORD.";
   }
   if (/timeout|timed out|ETIMEDOUT|ECONNRESET|ENOTFOUND|ECONNREFUSED/i.test(message)) {
     return "No se pudo conectar al servicio de correo. Intente de nuevo en unos momentos.";
@@ -196,7 +277,8 @@ export function isEmailConfigured(): boolean {
     hasGmailOAuthConfig() ||
     hasGmailSmtpConfig() ||
     hasBrevoApiConfig() ||
-    hasBrevoSmtpConfig()
+    hasBrevoSmtpConfig() ||
+    Boolean(getGmailUser() && getGoogleClientId() && getGoogleClientSecret())
   );
 }
 
@@ -212,7 +294,7 @@ interface SendQuoteEmailInput {
 
 async function sendViaBrevoApi(input: SendQuoteEmailInput): Promise<boolean> {
   const apiKey = getBrevoApiKey();
-  const fromEmail = getFromEmail();
+  const fromEmail = getBrevoFromEmail();
   if (!apiKey || !fromEmail) return false;
 
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -250,11 +332,9 @@ async function sendViaBrevoApi(input: SendQuoteEmailInput): Promise<boolean> {
 
 async function sendViaTransporter(
   transporter: nodemailer.Transporter,
-  input: SendQuoteEmailInput
+  input: SendQuoteEmailInput,
+  fromEmail: string
 ): Promise<boolean> {
-  const fromEmail = getFromEmail();
-  if (!fromEmail) return false;
-
   const mail: Mail.Options = {
     from: `"${input.fromName}" <${fromEmail}>`,
     to: input.to,
@@ -278,6 +358,21 @@ async function sendViaTransporter(
   }
 }
 
+async function tryProvider(
+  name: string,
+  fn: () => Promise<boolean>
+): Promise<{ name: string; ok: boolean; error?: string }> {
+  try {
+    const ok = await fn();
+    if (ok) return { name, ok: true };
+    return { name, ok: false, error: "no configurado" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[sendQuoteEmail] ${name} failed:`, message);
+    return { name, ok: false, error: message };
+  }
+}
+
 export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> {
   readMailEnv();
 
@@ -296,39 +391,62 @@ export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> 
   }
 
   const payload = { ...input, to: recipient };
+  const attempts: { name: string; ok: boolean; error?: string }[] = [];
 
-  try {
-    if (hasGmailOAuthConfig()) {
-      const transporter = await createGmailOAuthTransporter();
-      if (transporter) {
-        const sent = await sendViaTransporter(transporter, payload);
-        if (sent) return;
-      }
+  if (hasGmailOAuthConfig()) {
+    attempts.push(
+      await tryProvider("Gmail API (OAuth)", () => sendViaGmailApi(payload))
+    );
+    if (attempts.at(-1)?.ok) return;
+
+    const transporter = await createGmailOAuthTransporter();
+    if (transporter) {
+      attempts.push(
+        await tryProvider("Gmail SMTP (OAuth)", () =>
+          sendViaTransporter(transporter, payload, fromEmail)
+        )
+      );
+      if (attempts.at(-1)?.ok) return;
     }
-
-    if (hasGmailSmtpConfig()) {
-      const transporter = createGmailSmtpTransporter();
-      if (transporter) {
-        const sent = await sendViaTransporter(transporter, payload);
-        if (sent) return;
-      }
-    }
-
-    if (hasBrevoApiConfig()) {
-      const sent = await sendViaBrevoApi(payload);
-      if (sent) return;
-    }
-
-    if (hasBrevoSmtpConfig()) {
-      const transporter = createBrevoSmtpTransporter();
-      if (transporter) {
-        const sent = await sendViaTransporter(transporter, payload);
-        if (sent) return;
-      }
-    }
-
-    throw new Error(notConfiguredMessage());
-  } catch (error) {
-    throw new Error(classifyMailError(error));
   }
+
+  if (hasGmailSmtpConfig()) {
+    const transporter = createGmailSmtpTransporter();
+    if (transporter) {
+      attempts.push(
+        await tryProvider("Gmail SMTP", () =>
+          sendViaTransporter(transporter, payload, fromEmail)
+        )
+      );
+      if (attempts.at(-1)?.ok) return;
+    }
+  }
+
+  if (hasBrevoApiConfig()) {
+    attempts.push(await tryProvider("Brevo API", () => sendViaBrevoApi(payload)));
+    if (attempts.at(-1)?.ok) return;
+  }
+
+  if (hasBrevoSmtpConfig()) {
+    const transporter = createBrevoSmtpTransporter();
+    const brevoFrom = getBrevoFromEmail();
+    if (transporter && brevoFrom) {
+      attempts.push(
+        await tryProvider("Brevo SMTP", () =>
+          sendViaTransporter(transporter, payload, brevoFrom)
+        )
+      );
+      if (attempts.at(-1)?.ok) return;
+    }
+  }
+
+  const errors = attempts
+    .filter((attempt) => !attempt.ok)
+    .map((attempt) => `${attempt.name}: ${attempt.error ?? "falló"}`);
+
+  if (errors.length === 0) {
+    throw new Error(notConfiguredMessage());
+  }
+
+  throw new Error(classifyMailError(errors));
 }

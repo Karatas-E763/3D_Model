@@ -21,7 +21,10 @@ export async function GET(request: Request) {
   const error = url.searchParams.get("error");
 
   if (error) {
-    return NextResponse.json({ ok: false, error }, { status: 400 });
+    return new NextResponse(
+      `<html><body style="font-family:sans-serif;padding:2rem"><h1>Error OAuth</h1><p>${error}</p></body></html>`,
+      { status: 400, headers: { "Content-Type": "text/html; charset=utf-8" } }
+    );
   }
 
   if (!code) {
@@ -33,23 +36,35 @@ export async function GET(request: Request) {
     const { tokens } = await oauth2Client.getToken(code);
 
     if (!tokens.refresh_token) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "Google no devolvió refresh_token. Revoke el acceso en myaccount.google.com/permissions y vuelva a autorizar con prompt=consent.",
-        },
-        { status: 400 }
+      return new NextResponse(
+        `<html><body style="font-family:sans-serif;padding:2rem;max-width:640px">
+          <h1>Sin refresh token</h1>
+          <p>Revoke el acceso en <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a> y vuelva a autorizar.</p>
+        </body></html>`,
+        { status: 400, headers: { "Content-Type": "text/html; charset=utf-8" } }
       );
     }
 
-    return NextResponse.json({
-      ok: true,
-      message: "Copie GOOGLE_REFRESH_TOKEN en .env.local y en Vercel Environment Variables.",
-      GOOGLE_REFRESH_TOKEN: tokens.refresh_token,
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Gmail OAuth — Directrack</title></head>
+<body style="font-family:sans-serif;padding:2rem;max-width:720px;line-height:1.5">
+  <h1>OAuth completado</h1>
+  <p>Copie este valor en <strong>GOOGLE_REFRESH_TOKEN</strong> (.env.local y Vercel):</p>
+  <textarea readonly style="width:100%;height:120px;font-family:monospace">${tokens.refresh_token}</textarea>
+  <p>Después redepliegue en Vercel. Las cotizaciones se enviarán desde directrack.toluca@gmail.com.</p>
+</body>
+</html>`;
+
+    return new NextResponse(html, {
+      status: 200,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error al intercambiar código OAuth";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return new NextResponse(
+      `<html><body style="font-family:sans-serif;padding:2rem"><h1>Error</h1><pre>${message}</pre></body></html>`,
+      { status: 500, headers: { "Content-Type": "text/html; charset=utf-8" } }
+    );
   }
 }
