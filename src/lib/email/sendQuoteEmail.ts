@@ -1,4 +1,5 @@
 import { loadEnvConfig } from "@next/env";
+import { OAuth2Client } from "google-auth-library";
 import nodemailer from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 
@@ -96,12 +97,18 @@ function notConfiguredMessage() {
   return "El envío por correo no está configurado. Agregue GMAIL_USER y GMAIL_APP_PASSWORD en .env.local";
 }
 
-function createGmailOAuthTransporter(): nodemailer.Transporter | null {
+async function createGmailOAuthTransporter(): Promise<nodemailer.Transporter | null> {
   const user = getGmailUser();
   const clientId = getGoogleClientId();
   const clientSecret = getGoogleClientSecret();
   const refreshToken = getGoogleRefreshToken();
   if (!user || !clientId || !clientSecret || !refreshToken) return null;
+
+  const oauth2Client = new OAuth2Client(clientId, clientSecret);
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  const accessTokenResponse = await oauth2Client.getAccessToken();
+  const accessToken = accessTokenResponse.token;
+  if (!accessToken) return null;
 
   return nodemailer.createTransport({
     service: "gmail",
@@ -111,6 +118,7 @@ function createGmailOAuthTransporter(): nodemailer.Transporter | null {
       clientId,
       clientSecret,
       refreshToken,
+      accessToken,
     },
   });
 }
@@ -291,7 +299,7 @@ export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> 
 
   try {
     if (hasGmailOAuthConfig()) {
-      const transporter = createGmailOAuthTransporter();
+      const transporter = await createGmailOAuthTransporter();
       if (transporter) {
         const sent = await sendViaTransporter(transporter, payload);
         if (sent) return;
