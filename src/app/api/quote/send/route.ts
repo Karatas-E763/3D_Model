@@ -3,9 +3,14 @@ import { readProducts, readQuoteConfig } from "@/lib/cms/store";
 import {
   isEmailConfigured,
   isValidEmail,
-  normalizeEmail,
   sendQuoteEmail,
+  trimEmail,
 } from "@/lib/email/sendQuoteEmail";
+import {
+  buildQuoteEmailContent,
+  buildQuoteEmailSubject,
+  QUOTE_EMAIL_FROM_NAME,
+} from "@/lib/email/quoteEmailContent";
 import type { Product, QuoteConfig } from "@/types";
 import { generateQuotePdf } from "@/utils/quotePdf";
 
@@ -39,7 +44,7 @@ export async function POST(request: Request) {
       return errorResponse("Solicitud inválida", 400);
     }
 
-    const email = normalizeEmail(body.email ?? "");
+    const email = trimEmail(body.email ?? "");
     const { clientName, vehicleTitle, quoteItems } = body;
 
     if (!isValidEmail(email)) {
@@ -73,37 +78,17 @@ export async function POST(request: Request) {
       vehicleTitle,
     });
     const pdfBuffer = Buffer.from(pdfDoc.output("arraybuffer"));
-    const pdfFilename = `cotizacion-${config.companyName.toLowerCase().replace(/\s+/g, "-")}.pdf`;
+    const pdfFilename = `cotizacion-directrack-${Date.now()}.pdf`;
 
-    const greeting = clientName?.trim() ? `Estimado/a ${clientName.trim()}` : "Estimado/a cliente";
-    const subject = `Cotización ${config.companyName}${vehicleTitle ? ` — ${vehicleTitle}` : ""}`;
-    const text = `${greeting},
-
-Adjunto encontrará su cotización de ${config.companyName}.
-
-${config.quoteFooter}
-
-${config.providerName}
-${config.providerPhone}
-${config.providerEmail}`;
-
-    const html = `
-      <p>${greeting},</p>
-      <p>Adjunto encontrará su cotización de <strong>${config.companyName}</strong>.</p>
-      <p>${config.quoteFooter}</p>
-      <p>
-        ${config.providerName}<br/>
-        ${config.providerPhone}<br/>
-        <a href="mailto:${config.providerEmail}">${config.providerEmail}</a>
-      </p>
-    `.trim();
+    const { text, html } = buildQuoteEmailContent(clientName);
+    const subject = buildQuoteEmailSubject(vehicleTitle);
 
     await sendQuoteEmail({
       to: email,
       subject,
       text,
       html,
-      fromName: config.companyName,
+      fromName: QUOTE_EMAIL_FROM_NAME,
       pdfBuffer,
       pdfFilename,
     });
@@ -117,13 +102,13 @@ ${config.providerEmail}`;
     const message =
       error instanceof Error ? error.message : "Error al enviar la cotización";
 
-    if (message.includes("no está configurado") || message.includes("SMTP_FROM")) {
+    if (message.includes("no está configurado") || message.includes("GMAIL_USER")) {
       return errorResponse(message, 503);
     }
     if (message.includes("inválido")) {
       return errorResponse(message, 400);
     }
-    if (/conectar|Brevo SMTP|autenticación|remitente/i.test(message)) {
+    if (/conectar|autenticación|remitente|Gmail/i.test(message)) {
       return errorResponse(message, 502);
     }
 

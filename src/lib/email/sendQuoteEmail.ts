@@ -34,31 +34,105 @@ function getSmtpPass() {
   return sanitizeEnv(process.env.SMTP_PASS);
 }
 
-function getSmtpFrom() {
+function getGmailUser() {
   readMailEnv();
-  return sanitizeEnv(process.env.SMTP_FROM);
+  return sanitizeEnv(process.env.GMAIL_USER) ?? sanitizeEnv(process.env.SMTP_FROM);
+}
+
+function getGmailAppPassword() {
+  readMailEnv();
+  return sanitizeEnv(process.env.GMAIL_APP_PASSWORD);
+}
+
+function getGoogleClientId() {
+  readMailEnv();
+  return sanitizeEnv(process.env.GOOGLE_CLIENT_ID);
+}
+
+function getGoogleClientSecret() {
+  readMailEnv();
+  return sanitizeEnv(process.env.GOOGLE_CLIENT_SECRET);
+}
+
+function getGoogleRefreshToken() {
+  readMailEnv();
+  return sanitizeEnv(process.env.GOOGLE_REFRESH_TOKEN);
+}
+
+function getFromEmail() {
+  readMailEnv();
+  return getGmailUser() ?? sanitizeEnv(process.env.SMTP_FROM);
 }
 
 function isVercel() {
   return process.env.VERCEL === "1";
 }
 
-function hasBrevoApiConfig() {
-  return Boolean(getBrevoApiKey() && getSmtpFrom());
+function hasGmailOAuthConfig() {
+  return Boolean(
+    getGmailUser() &&
+      getGoogleClientId() &&
+      getGoogleClientSecret() &&
+      getGoogleRefreshToken()
+  );
 }
 
-function hasSmtpConfig() {
-  return Boolean(getSmtpUser() && getSmtpPass() && getSmtpFrom());
+function hasGmailSmtpConfig() {
+  return Boolean(getGmailUser() && getGmailAppPassword());
+}
+
+function hasBrevoApiConfig() {
+  return Boolean(getBrevoApiKey() && getFromEmail());
+}
+
+function hasBrevoSmtpConfig() {
+  return Boolean(getSmtpUser() && getSmtpPass() && getFromEmail());
 }
 
 function notConfiguredMessage() {
   if (isVercel()) {
-    return "El envío por correo no está configurado. En Vercel, agregue BREVO_API_KEY y SMTP_FROM (o SMTP_USER, SMTP_PASS y SMTP_FROM) y vuelva a desplegar.";
+    return "El envío por correo no está configurado. En Vercel, agregue GMAIL_USER y GMAIL_APP_PASSWORD (o credenciales OAuth de Gmail) y vuelva a desplegar.";
   }
-  return "El envío por correo no está configurado. Agregue BREVO_API_KEY y SMTP_FROM en .env.local";
+  return "El envío por correo no está configurado. Agregue GMAIL_USER y GMAIL_APP_PASSWORD en .env.local";
 }
 
-function createSmtpTransporter(): nodemailer.Transporter | null {
+function createGmailOAuthTransporter(): nodemailer.Transporter | null {
+  const user = getGmailUser();
+  const clientId = getGoogleClientId();
+  const clientSecret = getGoogleClientSecret();
+  const refreshToken = getGoogleRefreshToken();
+  if (!user || !clientId || !clientSecret || !refreshToken) return null;
+
+  return nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      type: "OAuth2",
+      user,
+      clientId,
+      clientSecret,
+      refreshToken,
+    },
+  });
+}
+
+function createGmailSmtpTransporter(): nodemailer.Transporter | null {
+  const user = getGmailUser();
+  const pass = getGmailAppPassword();
+  if (!user || !pass) return null;
+
+  return nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    requireTLS: true,
+    auth: { user, pass },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
+  });
+}
+
+function createBrevoSmtpTransporter(): nodemailer.Transporter | null {
   const user = getSmtpUser();
   const pass = getSmtpPass();
   if (!user || !pass) return null;
@@ -82,29 +156,40 @@ function classifyMailError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
 
   if (/535|authentication failed|invalid login|unauthorized|401|403/i.test(message)) {
-    return "Error de autenticación con Brevo. Verifique BREVO_API_KEY o las credenciales SMTP en Transactional → SMTP & API.";
+    return "Error de autenticación con Gmail. Verifique GMAIL_APP_PASSWORD o las credenciales OAuth (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN).";
   }
   if (/timeout|timed out|ETIMEDOUT|ECONNRESET|ENOTFOUND|ECONNREFUSED/i.test(message)) {
-    return "No se pudo conectar al servicio de correo Brevo. Intente de nuevo en unos momentos.";
+    return "No se pudo conectar al servicio de correo. Intente de nuevo en unos momentos.";
   }
   if (/550|553|sender|from address|not verified/i.test(message)) {
-    return "El remitente no está verificado en Brevo. Verifique que SMTP_FROM coincida con un remitente autorizado.";
+    return "El remitente no está autorizado. Verifique que GMAIL_USER sea directrack.toluca@gmail.com.";
   }
 
   return message || "Error al enviar la cotización por correo";
 }
 
 export function isValidEmail(email: string) {
-  const normalized = email.trim().toLowerCase();
-  return normalized.length > 0 && EMAIL_PATTERN.test(normalized);
+  const trimmed = email.trim();
+  return trimmed.length > 0 && EMAIL_PATTERN.test(trimmed);
 }
 
+/** Preserves the address exactly as entered (trimmed only). */
+export function trimEmail(email: string) {
+  return email.trim();
+}
+
+/** @deprecated Use trimEmail to preserve recipient casing. */
 export function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
+  return email.trim();
 }
 
 export function isEmailConfigured(): boolean {
-  return hasBrevoApiConfig() || hasSmtpConfig();
+  return (
+    hasGmailOAuthConfig() ||
+    hasGmailSmtpConfig() ||
+    hasBrevoApiConfig() ||
+    hasBrevoSmtpConfig()
+  );
 }
 
 interface SendQuoteEmailInput {
@@ -119,7 +204,7 @@ interface SendQuoteEmailInput {
 
 async function sendViaBrevoApi(input: SendQuoteEmailInput): Promise<boolean> {
   const apiKey = getBrevoApiKey();
-  const fromEmail = getSmtpFrom();
+  const fromEmail = getFromEmail();
   if (!apiKey || !fromEmail) return false;
 
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -155,10 +240,12 @@ async function sendViaBrevoApi(input: SendQuoteEmailInput): Promise<boolean> {
   return true;
 }
 
-async function sendViaSmtp(input: SendQuoteEmailInput): Promise<boolean> {
-  const transporter = createSmtpTransporter();
-  const fromEmail = getSmtpFrom();
-  if (!transporter || !fromEmail) return false;
+async function sendViaTransporter(
+  transporter: nodemailer.Transporter,
+  input: SendQuoteEmailInput
+): Promise<boolean> {
+  const fromEmail = getFromEmail();
+  if (!fromEmail) return false;
 
   const mail: Mail.Options = {
     from: `"${input.fromName}" <${fromEmail}>`,
@@ -186,7 +273,7 @@ async function sendViaSmtp(input: SendQuoteEmailInput): Promise<boolean> {
 export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> {
   readMailEnv();
 
-  const recipient = normalizeEmail(input.to);
+  const recipient = trimEmail(input.to);
   if (!isValidEmail(recipient)) {
     throw new Error("Correo electrónico inválido");
   }
@@ -195,22 +282,41 @@ export async function sendQuoteEmail(input: SendQuoteEmailInput): Promise<void> 
     throw new Error(notConfiguredMessage());
   }
 
-  const fromEmail = getSmtpFrom();
+  const fromEmail = getFromEmail();
   if (!fromEmail || !isValidEmail(fromEmail)) {
-    throw new Error("SMTP_FROM no está configurado o es inválido");
+    throw new Error("GMAIL_USER no está configurado o es inválido");
   }
 
   const payload = { ...input, to: recipient };
 
   try {
+    if (hasGmailOAuthConfig()) {
+      const transporter = createGmailOAuthTransporter();
+      if (transporter) {
+        const sent = await sendViaTransporter(transporter, payload);
+        if (sent) return;
+      }
+    }
+
+    if (hasGmailSmtpConfig()) {
+      const transporter = createGmailSmtpTransporter();
+      if (transporter) {
+        const sent = await sendViaTransporter(transporter, payload);
+        if (sent) return;
+      }
+    }
+
     if (hasBrevoApiConfig()) {
       const sent = await sendViaBrevoApi(payload);
       if (sent) return;
     }
 
-    if (hasSmtpConfig()) {
-      const sent = await sendViaSmtp(payload);
-      if (sent) return;
+    if (hasBrevoSmtpConfig()) {
+      const transporter = createBrevoSmtpTransporter();
+      if (transporter) {
+        const sent = await sendViaTransporter(transporter, payload);
+        if (sent) return;
+      }
     }
 
     throw new Error(notConfiguredMessage());
