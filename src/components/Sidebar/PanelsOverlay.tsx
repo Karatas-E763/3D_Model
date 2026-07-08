@@ -9,10 +9,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { useCMSProducts } from "@/hooks/useCMS";
 import { useModalZoomLock } from "@/hooks/useModalZoomLock";
 import { useQuoteTotals, formatPrice } from "@/hooks/useProducts";
-
-interface PanelsOverlayProps {
-  vehicleTitle?: string;
-}
+import type { Product } from "@/types";
 
 type MobilePanel = "equipment" | "quote";
 
@@ -30,18 +27,145 @@ function useIsMobile() {
   return isMobile;
 }
 
-export default function PanelsOverlay({ vehicleTitle }: PanelsOverlayProps) {
+function PanelsContent({
+  product,
+  selectedHotspotLabel,
+  modalZoom,
+  isMobile,
+  onClose,
+}: {
+  product: Product;
+  selectedHotspotLabel?: string;
+  modalZoom: number;
+  isMobile: boolean;
+  onClose: () => void;
+}) {
+  const addToQuote = useAppStore((s) => s.addToQuote);
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>("equipment");
+  const { total, itemCount } = useQuoteTotals();
+
+  const zoomStyle = {
+    "--modal-zoom": isMobile ? 1 : modalZoom,
+  } as CSSProperties;
+
+  return (
+    <>
+      <div className="shrink-0 border-b border-gray-200 bg-white lg:hidden">
+        <div className="flex items-start justify-between gap-3 px-4 pb-2 pt-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-[#1e88e5]">
+              Punto: {selectedHotspotLabel ?? "Cabina"}
+            </p>
+            <p className="truncate text-base font-bold leading-tight text-[#1a3a5c]">
+              {product.name}
+            </p>
+            <p className="mt-1 text-sm text-gray-600">
+              {formatPrice(product.price)}
+              {itemCount > 0 && (
+                <span className="font-semibold text-[#1e88e5]">
+                  {" "}
+                  · {itemCount} en cotización · {formatPrice(total)}
+                </span>
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 rounded-full p-2 text-gray-400 hover:bg-gray-100"
+            aria-label="Cerrar paneles"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 px-4 pb-3">
+          <button
+            type="button"
+            onClick={() => setMobilePanel("equipment")}
+            className={`rounded-xl px-3 py-2.5 text-xs font-bold uppercase tracking-wide transition ${
+              mobilePanel === "equipment"
+                ? "bg-[#1e88e5] text-white shadow-sm"
+                : "bg-gray-50 text-[#1a3a5c] ring-1 ring-gray-200"
+            }`}
+          >
+            Equipo
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobilePanel("quote")}
+            className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold uppercase tracking-wide transition ${
+              mobilePanel === "quote"
+                ? "bg-[#1e88e5] text-white shadow-sm"
+                : "bg-gray-50 text-[#1a3a5c] ring-1 ring-gray-200"
+            }`}
+          >
+            Cotización
+            {itemCount > 0 && (
+              <span
+                className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold ${
+                  mobilePanel === "quote"
+                    ? "bg-white text-[#1e88e5]"
+                    : "bg-[#1e88e5] text-white"
+                }`}
+              >
+                {itemCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="modal-zoom-lock flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row lg:gap-4 lg:p-0"
+        style={zoomStyle}
+      >
+        <div
+          className={`min-h-0 flex-col gap-3 overflow-hidden lg:flex lg:flex-1 lg:w-[48%] ${
+            mobilePanel === "equipment" ? "flex flex-1" : "hidden"
+          }`}
+        >
+          <div className="min-h-0 flex-1 overflow-hidden max-lg:[&>div>div:first-child]:hidden">
+            <EquipmentCard
+              product={product}
+              hotspotLabel={selectedHotspotLabel ?? "Cabina"}
+              onAddToQuote={() => {
+                addToQuote(product.id);
+                setMobilePanel("quote");
+              }}
+              onClose={onClose}
+            />
+          </div>
+          <div className="hidden shrink-0 lg:block [&_.aspect-video]:max-h-[6.5rem]">
+            <VideoPlayer
+              key={product.video || product.id}
+              src={product.video || "/assets/videos/video.mp4"}
+              title="¿CÓMO FUNCIONA DIRECTRACK GPS PRO?"
+            />
+          </div>
+        </div>
+
+        <div
+          className={`min-h-0 flex-col overflow-hidden lg:flex lg:flex-1 lg:w-[52%] ${
+            mobilePanel === "quote" ? "flex flex-1" : "hidden"
+          }`}
+        >
+          <QuotePanel />
+        </div>
+      </div>
+    </>
+  );
+}
+
+export default function PanelsOverlay() {
   const panelsOpen = useAppStore((s) => s.panelsOpen);
   const selectedProduct = useAppStore((s) => s.selectedProduct);
   const selectedHotspot = useAppStore((s) => s.selectedHotspot);
   const setPanelsOpen = useAppStore((s) => s.setPanelsOpen);
-  const addToQuote = useAppStore((s) => s.addToQuote);
   const syncQuoteWithProductCatalog = useAppStore((s) => s.syncQuoteWithProductCatalog);
   const { products } = useCMSProducts();
   const modalZoom = useModalZoomLock();
   const isMobile = useIsMobile();
-  const [mobilePanel, setMobilePanel] = useState<MobilePanel>("equipment");
-  const { total, itemCount } = useQuoteTotals();
 
   useEffect(() => {
     if (!products.length) return;
@@ -51,10 +175,6 @@ export default function PanelsOverlay({ vehicleTitle }: PanelsOverlayProps) {
   const product = selectedProduct ?? products[0] ?? null;
 
   useEffect(() => {
-    if (panelsOpen) setMobilePanel("equipment");
-  }, [panelsOpen, product?.id]);
-
-  useEffect(() => {
     if (!panelsOpen || !isMobile) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -62,10 +182,6 @@ export default function PanelsOverlay({ vehicleTitle }: PanelsOverlayProps) {
       document.body.style.overflow = previous;
     };
   }, [panelsOpen, isMobile]);
-
-  const zoomStyle = {
-    "--modal-zoom": isMobile ? 1 : modalZoom,
-  } as CSSProperties;
 
   const sheetMotion = isMobile
     ? {
@@ -105,110 +221,14 @@ export default function PanelsOverlay({ vehicleTitle }: PanelsOverlayProps) {
               transition={{ type: "spring", stiffness: 280, damping: 30 }}
               className="pointer-events-auto flex h-full min-h-0 w-full flex-col overflow-hidden rounded-t-2xl border border-gray-200 bg-[#f5f7fa] shadow-2xl lg:h-full lg:max-w-[920px] lg:rounded-none lg:border-0 lg:bg-transparent lg:shadow-none"
             >
-              <div className="shrink-0 border-b border-gray-200 bg-white lg:hidden">
-                <div className="flex items-start justify-between gap-3 px-4 pb-2 pt-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[#1e88e5]">
-                      Punto: {selectedHotspot?.label ?? "Cabina"}
-                    </p>
-                    <p className="truncate text-base font-bold leading-tight text-[#1a3a5c]">
-                      {product.name}
-                    </p>
-                    <p className="mt-1 text-sm text-gray-600">
-                      {formatPrice(product.price)}
-                      {itemCount > 0 && (
-                        <span className="font-semibold text-[#1e88e5]">
-                          {" "}
-                          · {itemCount} en cotización · {formatPrice(total)}
-                        </span>
-                      )}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setPanelsOpen(false)}
-                    className="shrink-0 rounded-full p-2 text-gray-400 hover:bg-gray-100"
-                    aria-label="Cerrar paneles"
-                  >
-                    ✕
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 px-4 pb-3">
-                  <button
-                    type="button"
-                    onClick={() => setMobilePanel("equipment")}
-                    className={`rounded-xl px-3 py-2.5 text-xs font-bold uppercase tracking-wide transition ${
-                      mobilePanel === "equipment"
-                        ? "bg-[#1e88e5] text-white shadow-sm"
-                        : "bg-gray-50 text-[#1a3a5c] ring-1 ring-gray-200"
-                    }`}
-                  >
-                    Equipo
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMobilePanel("quote")}
-                    className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold uppercase tracking-wide transition ${
-                      mobilePanel === "quote"
-                        ? "bg-[#1e88e5] text-white shadow-sm"
-                        : "bg-gray-50 text-[#1a3a5c] ring-1 ring-gray-200"
-                    }`}
-                  >
-                    Cotización
-                    {itemCount > 0 && (
-                      <span
-                        className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold ${
-                          mobilePanel === "quote"
-                            ? "bg-white text-[#1e88e5]"
-                            : "bg-[#1e88e5] text-white"
-                        }`}
-                      >
-                        {itemCount}
-                      </span>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <div
-                className="modal-zoom-lock flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row lg:gap-4 lg:p-0"
-                style={zoomStyle}
-              >
-                <div
-                  className={`min-h-0 flex-col gap-3 overflow-hidden lg:flex lg:flex-1 lg:w-[48%] ${
-                    mobilePanel === "equipment" ? "flex flex-1" : "hidden"
-                  }`}
-                >
-                  <div className="min-h-0 flex-1 overflow-hidden max-lg:[&>div>div:first-child]:hidden">
-                    <EquipmentCard
-                      key={product.id}
-                      product={product}
-                      hotspotLabel={selectedHotspot?.label ?? "Cabina"}
-                      onAddToQuote={() => {
-                        addToQuote(product.id);
-                        setMobilePanel("quote");
-                      }}
-                      onClose={() => setPanelsOpen(false)}
-                    />
-                  </div>
-                  <div className="hidden shrink-0 lg:block [&_.aspect-video]:max-h-[6.5rem]">
-                    <VideoPlayer
-                      key={product.video || product.id}
-                      src={product.video || "/assets/videos/video.mp4"}
-                      title="¿CÓMO FUNCIONA DIRECTRACK GPS PRO?"
-                    />
-                  </div>
-                </div>
-
-                <div
-                  className={`min-h-0 flex-col overflow-hidden lg:flex lg:flex-1 lg:w-[52%] ${
-                    mobilePanel === "quote" ? "flex flex-1" : "hidden"
-                  }`}
-                >
-                  <QuotePanel vehicleTitle={vehicleTitle} />
-                </div>
-              </div>
+              <PanelsContent
+                key={product.id}
+                product={product}
+                selectedHotspotLabel={selectedHotspot?.label}
+                modalZoom={modalZoom}
+                isMobile={isMobile}
+                onClose={() => setPanelsOpen(false)}
+              />
             </motion.div>
           </motion.div>
         </>

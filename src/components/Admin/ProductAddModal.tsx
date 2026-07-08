@@ -27,7 +27,7 @@ function createProductId(name: string, existingIds: string[]) {
   return `${base}-${Date.now()}`;
 }
 
-async function uploadFile(file: File, type: "image" | "pdf" | "video") {
+async function uploadFile(file: File, type: "image" | "video") {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("type", type);
@@ -56,9 +56,8 @@ export default function ProductAddModal({
   const [price, setPrice] = useState("");
   const [description, setDescription] = useState("");
   const [image, setImage] = useState("");
-  const [pdf, setPdf] = useState("");
   const [video, setVideo] = useState("");
-  const [uploading, setUploading] = useState<"image" | "pdf" | "video" | null>(null);
+  const [uploading, setUploading] = useState<"image" | "video" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
@@ -66,7 +65,6 @@ export default function ProductAddModal({
     setPrice("");
     setDescription("");
     setImage("");
-    setPdf("");
     setVideo("");
     setError(null);
     setUploading(null);
@@ -78,13 +76,12 @@ export default function ProductAddModal({
     onClose();
   };
 
-  const handleFileUpload = async (file: File, type: "image" | "pdf" | "video") => {
+  const handleFileUpload = async (file: File, type: "image" | "video") => {
     setUploading(type);
     setError(null);
     try {
       const path = await uploadFile(file, type);
       if (type === "image") setImage(path);
-      else if (type === "pdf") setPdf(path);
       else setVideo(path);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al subir el archivo");
@@ -113,11 +110,6 @@ export default function ProductAddModal({
       return;
     }
 
-    if (!pdf.trim()) {
-      setError("Sube el PDF del equipo");
-      return;
-    }
-
     if (!video.trim()) {
       setError("Sube el video del equipo");
       return;
@@ -129,7 +121,7 @@ export default function ProductAddModal({
       description: description.trim(),
       price: parsedPrice,
       image: image.trim(),
-      pdf: pdf.trim(),
+      pdf: "",
       video: video.trim(),
       benefits: [],
       technicalSpecs: [],
@@ -201,28 +193,6 @@ export default function ProductAddModal({
                     />
                   </label>
                   {image && <span className="text-xs text-gray-500">{image}</span>}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-gray-600">PDF manual</label>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">
-                    <FaUpload className="text-[#1e88e5]" />
-                    {uploading === "pdf" ? "Subiendo…" : "Subir PDF"}
-                    <input
-                      type="file"
-                      accept="application/pdf"
-                      className="hidden"
-                      disabled={uploading !== null}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) void handleFileUpload(file, "pdf");
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                  {pdf && <span className="text-xs text-gray-500">{pdf}</span>}
                 </div>
               </div>
 

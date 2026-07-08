@@ -39,7 +39,6 @@ interface HotspotEditor3DProps {
   onSelect: (id: string | null) => void;
   onUpdatePosition: (id: string, relativePosition: [number, number, number]) => void;
   onRename: (id: string, label: string) => void;
-  onDelete: (id: string) => void;
 }
 
 interface ContextMenuState {
@@ -534,14 +533,12 @@ function HotspotContextMenu({
   onClose,
   onMove,
   onRename,
-  onDelete,
 }: {
   menu: ContextMenuState;
   label: string;
   onClose: () => void;
   onMove: () => void;
   onRename: () => void;
-  onDelete: () => void;
 }) {
   useEffect(() => {
     const close = () => onClose();
@@ -577,13 +574,6 @@ function HotspotContextMenu({
       >
         Renombrar
       </button>
-      <button
-        type="button"
-        className="block w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-        onClick={onDelete}
-      >
-        Eliminar
-      </button>
     </div>
   );
 }
@@ -599,7 +589,6 @@ function HotspotEditor3DInner({
   onSelect,
   onUpdatePosition,
   onRename,
-  onDelete,
 }: HotspotEditor3DProps) {
   const { progress } = useProgress();
   const [modelReady, setModelReady] = useState(false);
@@ -675,7 +664,6 @@ function HotspotEditor3DInner({
               onSelect={onSelect}
               onUpdatePosition={onUpdatePosition}
               onRename={onRename}
-              onDelete={onDelete}
               onContextMenu={handleContextMenu}
               onModelReady={handleModelReady}
               onDragEnd={handleDragEnd}
@@ -700,13 +688,6 @@ function HotspotEditor3DInner({
             closeMenu();
             const next = window.prompt("Nuevo nombre del punto:", menuHotspot.label);
             if (next?.trim()) onRename(contextMenu.id, next.trim());
-          }}
-          onDelete={() => {
-            closeMenu();
-            if (window.confirm(`¿Eliminar "${menuHotspot.label}"?`)) {
-              onDelete(contextMenu.id);
-              if (selectedId === contextMenu.id) onSelect(null);
-            }
           }}
         />
       )}

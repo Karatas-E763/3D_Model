@@ -2,6 +2,7 @@
 
 import { use, useEffect } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { FaBars, FaTimes } from "react-icons/fa";
 import Header from "@/components/Sidebar/Header";
@@ -29,15 +30,16 @@ interface PageProps {
 
 export default function VehiclePage({ params }: PageProps) {
   const { id } = use(params);
-  const { vehicles } = useCMSVehicles();
+  const { vehicles, loading: vehiclesLoading } = useCMSVehicles();
   const { hotspots: hotspotInputs } = useCMSHotspots(id);
-  const vehicle = vehicles.find((v) => v.id === id) ?? vehicles[0];
+  const vehicle = vehicles.find((v) => v.id === id);
 
   const panelsOpen = useAppStore((s) => s.panelsOpen);
   const togglePanels = useAppStore((s) => s.togglePanels);
   const setPanelsOpen = useAppStore((s) => s.setPanelsOpen);
   const setSelectedHotspot = useAppStore((s) => s.setSelectedHotspot);
   const setSelectedProduct = useAppStore((s) => s.setSelectedProduct);
+  const clearQuote = useAppStore((s) => s.clearQuote);
 
   useEffect(() => {
     if (!vehicle) return;
@@ -47,13 +49,25 @@ export default function VehiclePage({ params }: PageProps) {
       setPanelsOpen(false);
       setSelectedHotspot(null);
       setSelectedProduct(null);
+      clearQuote();
     };
-  }, [id, vehicle, setPanelsOpen, setSelectedHotspot, setSelectedProduct]);
+  }, [id, vehicle, setPanelsOpen, setSelectedHotspot, setSelectedProduct, clearQuote]);
 
-  if (!vehicle) {
+  if (vehiclesLoading && !vehicle) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f5f7fa]">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#1e88e5] border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (!vehicle) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[#f5f7fa] px-4">
+        <p className="text-lg font-semibold text-[#1a3a5c]">Unidad no encontrada</p>
+        <Link href="/" className="text-sm font-medium text-[#1e88e5] hover:underline">
+          Volver al inicio
+        </Link>
       </div>
     );
   }
@@ -91,7 +105,7 @@ export default function VehiclePage({ params }: PageProps) {
           </div>
         </div>
 
-        <PanelsOverlay vehicleTitle={vehicle.title} />
+        <PanelsOverlay />
 
         <button
           type="button"

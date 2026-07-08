@@ -2,46 +2,19 @@
 
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
-import { FaShoppingCart, FaDownload, FaTimes } from "react-icons/fa";
+import { FaShoppingCart, FaTimes } from "react-icons/fa";
 import { useAppStore } from "@/store/useAppStore";
-import { useCMSProducts, useCMSQuoteConfig } from "@/hooks/useCMS";
+import { useCMSProducts } from "@/hooks/useCMS";
 import { useQuoteTotals, formatPrice } from "@/hooks/useProducts";
 
-interface QuotePanelProps {
-  vehicleTitle?: string;
-}
-
-export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
+export default function QuotePanel() {
   const quoteItems = useAppStore((s) => s.quoteItems);
   const selectedProduct = useAppStore((s) => s.selectedProduct);
   const updateQuantity = useAppStore((s) => s.updateQuantity);
   const removeFromQuote = useAppStore((s) => s.removeFromQuote);
   const setSelectedProduct = useAppStore((s) => s.setSelectedProduct);
   const { getProduct } = useCMSProducts();
-  const { config } = useCMSQuoteConfig();
-  const { subtotal, iva, total, itemCount } = useQuoteTotals();
-
-  const buildLineItems = () =>
-    quoteItems
-      .map((item) => {
-        const product = getProduct(item.productId);
-        if (!product) return null;
-        return { product, quantity: item.quantity };
-      })
-      .filter((item): item is { product: NonNullable<ReturnType<typeof getProduct>>; quantity: number } =>
-        item !== null
-      );
-
-  const handleDownloadQuotePDF = async () => {
-    const items = buildLineItems();
-    if (!items.length) return;
-    const { downloadQuotePdf } = await import("@/utils/quotePdf");
-    downloadQuotePdf({
-      items,
-      config,
-      vehicleTitle,
-    });
-  };
+  const { subtotal, iva, total, itemCount, ivaRate } = useQuoteTotals();
 
   return (
     <motion.div
@@ -180,7 +153,7 @@ export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
                 <span>{formatPrice(subtotal)}</span>
               </div>
               <div className="flex justify-between text-gray-600">
-                <span>IVA (16%)</span>
+                <span>IVA ({Math.round(ivaRate * 100)}%)</span>
                 <span>{formatPrice(iva)}</span>
               </div>
               <div className="flex justify-between border-t border-gray-100 pt-2 text-base font-bold">
@@ -190,20 +163,6 @@ export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
             </div>
           </div>
         )}
-
-        <div className="shrink-0 space-y-2 border-t border-gray-100 p-4">
-          <motion.button
-            type="button"
-            onClick={handleDownloadQuotePDF}
-            disabled={quoteItems.length === 0}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1e88e5] py-3 text-sm font-semibold text-white shadow-md hover:bg-[#1565c0] disabled:cursor-not-allowed disabled:opacity-40"
-            whileHover={{ scale: quoteItems.length > 0 ? 1.02 : 1 }}
-            whileTap={{ scale: quoteItems.length > 0 ? 0.98 : 1 }}
-          >
-            <FaDownload />
-            Descargar cotización PDF
-          </motion.button>
-        </div>
       </motion.div>
   );
 }

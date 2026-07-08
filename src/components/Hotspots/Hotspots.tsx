@@ -152,11 +152,10 @@ export default function Hotspots({ hotspots }: HotspotsProps) {
 
   const handleSelect = useCallback(
     (hotspot: Hotspot) => {
-      if (panelsOpen) return;
       setSelectedHotspot(hotspot);
       const product = getProduct(hotspot.productId);
       if (product) setSelectedProduct(product);
-      openPanelsWithCatalog();
+      if (!panelsOpen) openPanelsWithCatalog();
     },
     [panelsOpen, setSelectedHotspot, setSelectedProduct, openPanelsWithCatalog, getProduct]
   );

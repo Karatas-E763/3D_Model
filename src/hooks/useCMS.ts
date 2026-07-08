@@ -165,7 +165,7 @@ export function useCMSHotspots(vehicleId: string) {
       `/api/cms/hotspots?vehicleId=${encodeURIComponent(vehicleId)}`,
       { hotspots: seedHotspots }
     ).then((data) => {
-      if (active && data.hotspots?.length) {
+      if (active && Array.isArray(data.hotspots)) {
         setRemoteHotspots((current) => ({
           ...current,
           [vehicleId]: data.hotspots,
@@ -188,7 +188,7 @@ export function useCMSHotspots(vehicleId: string) {
         `/api/cms/hotspots?vehicleId=${encodeURIComponent(vehicleId)}`,
         { hotspots: seedHotspots }
       );
-      if (data.hotspots?.length) {
+      if (Array.isArray(data.hotspots)) {
         setRemoteHotspots((current) => ({
           ...current,
           [vehicleId]: data.hotspots,

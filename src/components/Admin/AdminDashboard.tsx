@@ -144,11 +144,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     );
   }, []);
 
-  const deleteHotspot = useCallback((id: string) => {
-    setHotspots((current) => current.filter((hs) => hs.id !== id));
-    setSelectedHotspotId((current) => (current === id ? null : current));
-  }, []);
-
   const selectedVehicleData = vehicles.find((v) => v.id === selectedVehicle);
 
   const tabs: { id: Tab; label: string }[] = [
@@ -264,11 +259,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                     next[idx] = { ...product, image: v };
                     setProducts(next);
                   }} />
-                  <Field label="PDF manual" value={product.pdf} onChange={(v) => {
-                    const next = [...products];
-                    next[idx] = { ...product, pdf: v };
-                    setProducts(next);
-                  }} />
                   <Field label="Video (ruta)" value={product.video ?? ""} onChange={(v) => {
                     const next = [...products];
                     next[idx] = { ...product, video: v };
@@ -381,7 +371,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 onSelect={setSelectedHotspotId}
                 onUpdatePosition={updateHotspotPosition}
                 onRename={renameHotspot}
-                onDelete={deleteHotspot}
               />
             )}
 
@@ -395,19 +384,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 }`}
                 onClick={() => setSelectedHotspotId(hs.id)}
               >
-                <div className="mb-3 flex items-center justify-between">
+                <div className="mb-3">
                   <h3 className="font-semibold text-[#1a3a5c]">{hs.label}</h3>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!window.confirm(`¿Eliminar "${hs.label}"?`)) return;
-                      deleteHotspot(hs.id);
-                    }}
-                    className="shrink-0 text-sm text-red-500 hover:text-red-700"
-                  >
-                    Eliminar
-                  </button>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Field label="ID" value={hs.id} onChange={(v) => {

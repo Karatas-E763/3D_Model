@@ -20,7 +20,8 @@ export function useQuoteTotals() {
     }, 0);
     const iva = subtotal * ivaRate;
     const total = subtotal + iva;
-    return { subtotal, iva, total, itemCount: quoteItems.reduce((s, i) => s + i.quantity, 0) };
+    const itemCount = quoteItems.reduce((s, i) => s + i.quantity, 0);
+    return { subtotal, iva, total, itemCount, ivaRate };
   }, [quoteItems, getProduct, ivaRate]);
 }
 
