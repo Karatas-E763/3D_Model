@@ -1,9 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { FaShoppingCart, FaFileAlt, FaDownload, FaTimes } from "react-icons/fa";
+import { FaShoppingCart, FaDownload, FaTimes } from "react-icons/fa";
 import { useAppStore } from "@/store/useAppStore";
 import { useCMSProducts, useCMSQuoteConfig } from "@/hooks/useCMS";
 import { useQuoteTotals, formatPrice } from "@/hooks/useProducts";
@@ -13,7 +12,6 @@ interface QuotePanelProps {
 }
 
 export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
-  const router = useRouter();
   const quoteItems = useAppStore((s) => s.quoteItems);
   const selectedProduct = useAppStore((s) => s.selectedProduct);
   const updateQuantity = useAppStore((s) => s.updateQuantity);
@@ -33,14 +31,6 @@ export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
       .filter((item): item is { product: NonNullable<ReturnType<typeof getProduct>>; quantity: number } =>
         item !== null
       );
-
-  const handleRequestQuote = () => {
-    if (quoteItems.length === 0) return;
-    const params = new URLSearchParams();
-    if (vehicleTitle) params.set("vehicle", vehicleTitle);
-    const query = params.toString();
-    router.push(query ? `/resend?${query}` : "/resend");
-  };
 
   const handleDownloadQuotePDF = async () => {
     const items = buildLineItems();
@@ -204,20 +194,9 @@ export default function QuotePanel({ vehicleTitle }: QuotePanelProps) {
         <div className="shrink-0 space-y-2 border-t border-gray-100 p-4">
           <motion.button
             type="button"
-            onClick={handleRequestQuote}
-            disabled={quoteItems.length === 0}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1e88e5] py-3 text-sm font-semibold text-white shadow-md hover:bg-[#1565c0] disabled:cursor-not-allowed disabled:opacity-40"
-            whileHover={{ scale: quoteItems.length > 0 ? 1.02 : 1 }}
-            whileTap={{ scale: quoteItems.length > 0 ? 0.98 : 1 }}
-          >
-            <FaFileAlt />
-            Solicitar cotización
-          </motion.button>
-          <motion.button
-            type="button"
             onClick={handleDownloadQuotePDF}
             disabled={quoteItems.length === 0}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-[#1e88e5] py-3 text-sm font-semibold text-[#1e88e5] hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1e88e5] py-3 text-sm font-semibold text-white shadow-md hover:bg-[#1565c0] disabled:cursor-not-allowed disabled:opacity-40"
             whileHover={{ scale: quoteItems.length > 0 ? 1.02 : 1 }}
             whileTap={{ scale: quoteItems.length > 0 ? 0.98 : 1 }}
           >
