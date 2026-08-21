@@ -1,0 +1,67 @@
+{
+  "hotspots": [
+    {
+      "id": "parabrisas",
+      "label": "Parabrisas",
+      "description": "Ubicación ideal para GPS principal, cámara DMS y botón de pánico. Visibilidad directa del conductor y acceso a alimentación eléctrica.",
+      "relativePosition": [0.12, 0.68, 0.48],
+      "labelOffset": [80, -36],
+      "productId": "gps-pro",
+      "installationNotes": "Instalar bajo tablero o en consola central. Conectar a línea de ignición 12V/24V."
+    },
+    {
+      "id": "deflector",
+      "label": "Deflector aerodinámico",
+      "description": "Punto óptimo para antena GPS externa y comunicación satelital con cobertura 360°.",
+      "relativePosition": [0.14, 0.88, 0.50],
+      "labelOffset": [70, -52],
+      "productId": "gps-pro",
+      "installationNotes": "Antena magnética o atornillada en deflector. Cable coaxial hacia cabina."
+    },
+    {
+      "id": "puerta",
+      "label": "Puerta",
+      "description": "Sensor de apertura de puerta para control de acceso y seguridad del conductor.",
+      "relativePosition": [0.18, 0.55, 0.35],
+      "labelOffset": [-78, -28],
+      "productId": "door-sensor",
+      "installationNotes": "Montar sensor magnético en marco de puerta. Sin perforación del chasis."
+    },
+    {
+      "id": "tanque",
+      "label": "Tanque de combustible",
+      "description": "Instalación de sensor ultrasónico para monitoreo preciso de nivel de combustible.",
+      "relativePosition": [0.22, 0.32, 0.58],
+      "labelOffset": [85, 40],
+      "productId": "fuel-sensor",
+      "installationNotes": "Sensor adherido al exterior del tanque. Calibración remota desde plataforma."
+    },
+    {
+      "id": "quinta-rueda",
+      "label": "Quinta rueda",
+      "description": "Sensor de desacople para detectar separación no autorizada del remolque.",
+      "relativePosition": [0.48, 0.38, 0.50],
+      "labelOffset": [0, 58],
+      "productId": "door-sensor",
+      "installationNotes": "Instalar en zona de acoplamiento. Alerta inmediata al desenganche."
+    },
+    {
+      "id": "llantas",
+      "label": "Llantas",
+      "description": "Monitoreo de presión y temperatura de neumáticos para prevención de fallas.",
+      "relativePosition": [0.58, 0.16, 0.52],
+      "labelOffset": [-70, 38],
+      "productId": "gps-pro",
+      "installationNotes": "Sensores TPMS en válvulas. Integración con plataforma de flotas."
+    },
+    {
+      "id": "parachoques",
+      "label": "Parachoques delantero",
+      "description": "Cámara frontal y sensores de proximidad para asistencia al conductor.",
+      "relativePosition": [0.05, 0.22, 0.52],
+      "labelOffset": [65, 45],
+      "productId": "camera-dms",
+      "installationNotes": "Cámara con visión amplia. Protección IP67 contra agua y polvo."
+    }
+  ]
+}

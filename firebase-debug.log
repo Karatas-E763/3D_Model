@@ -1,0 +1,62 @@
+[debug] [2026-06-29T11:39:30.029Z] ----------------------------------------------------------------------
+[debug] [2026-06-29T11:39:30.031Z] Command:       C:\nvm4w\nodejs\node.exe C:\nvm4w\nodejs\node_modules\firebase-tools\lib\bin\firebase.js login
+[debug] [2026-06-29T11:39:30.031Z] CLI Version:   15.22.3
+[debug] [2026-06-29T11:39:30.031Z] Platform:      win32
+[debug] [2026-06-29T11:39:30.031Z] Node Version:  v24.16.0
+[debug] [2026-06-29T11:39:30.031Z] Detected Agent: unknown
+[debug] [2026-06-29T11:39:30.032Z] Time:          Mon Jun 29 2026 14:39:30 GMT+0300 (Eastern European Summer Time)
+[debug] [2026-06-29T11:39:30.032Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-06-29T11:39:30.033Z] >>> [apiv2][query] GET https://firebase-public.firebaseio.com/cli.json [none]
+[info] i  The Firebase CLI’s MCP server feature can optionally make use of Gemini in Firebase. Learn more about Gemini in Firebase and how it uses your data: https://firebase.google.com/docs/gemini-in-firebase#how-gemini-in-firebase-uses-your-data 
+[debug] [2026-06-29T11:39:31.567Z] <<< [apiv2][status] GET https://firebase-public.firebaseio.com/cli.json 200
+[debug] [2026-06-29T11:39:31.567Z] <<< [apiv2][body] GET https://firebase-public.firebaseio.com/cli.json {"cloudBuildErrorAfter":1594252800000,"cloudBuildWarnAfter":1590019200000,"defaultNode10After":1594252800000,"minVersion":"3.0.5","node8DeploysDisabledAfter":1613390400000,"node8RuntimeDisabledAfter":1615809600000,"node8WarnAfter":1600128000000}
+[info] 
+[info] i  Firebase optionally collects CLI and Emulator Suite usage and error reporting information to help improve our products. Data is collected in accordance with Google's privacy policy (https://policies.google.com/privacy) and is not used to identify you. 
+[info] 
+[info] i  To change your preferences at any time, run `firebase logout` and `firebase login` again. 
+[info] 
+[info] Visit this URL on this device to log in:
+[info] https://accounts.google.com/o/oauth2/auth?client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com&scope=email%20openid%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloudplatformprojects.readonly%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Ffirebase%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&response_type=code&state=919666659&redirect_uri=http%3A%2F%2Flocalhost%3A9005
+[info] 
+[info] Waiting for authentication...
+[debug] [2026-06-29T12:51:27.521Z] ----------------------------------------------------------------------
+[debug] [2026-06-29T12:51:27.523Z] Command:       C:\nvm4w\nodejs\node.exe C:\nvm4w\nodejs\node_modules\firebase-tools\lib\bin\firebase.js login
+[debug] [2026-06-29T12:51:27.523Z] CLI Version:   15.22.3
+[debug] [2026-06-29T12:51:27.523Z] Platform:      win32
+[debug] [2026-06-29T12:51:27.523Z] Node Version:  v24.16.0
+[debug] [2026-06-29T12:51:27.523Z] Detected Agent: unknown
+[debug] [2026-06-29T12:51:27.523Z] Time:          Mon Jun 29 2026 15:51:27 GMT+0300 (Eastern European Summer Time)
+[debug] [2026-06-29T12:51:27.523Z] ----------------------------------------------------------------------
+[debug] 
+[info] i  The Firebase CLI’s MCP server feature can optionally make use of Gemini in Firebase. Learn more about Gemini in Firebase and how it uses your data: https://firebase.google.com/docs/gemini-in-firebase#how-gemini-in-firebase-uses-your-data 
+[info] 
+[info] i  Firebase optionally collects CLI and Emulator Suite usage and error reporting information to help improve our products. Data is collected in accordance with Google's privacy policy (https://policies.google.com/privacy) and is not used to identify you. 
+[info] 
+[info] i  To change your preferences at any time, run `firebase logout` and `firebase login` again. 
+[info] 
+[info] Visit this URL on this device to log in:
+[info] https://accounts.google.com/o/oauth2/auth?client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com&scope=email%20openid%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloudplatformprojects.readonly%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Ffirebase%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&response_type=code&state=628902726&redirect_uri=http%3A%2F%2Flocalhost%3A9005
+[info] 
+[info] Waiting for authentication...
+[debug] [2026-06-29T12:52:00.708Z] >>> [apiv2][query] POST https://auth.firebase.tools/attest [none]
+[debug] [2026-06-29T12:52:00.708Z] >>> [apiv2][body] POST https://auth.firebase.tools/attest {"session_id":"f58a29b6-6e5d-4372-bedc-4a5a0a775de1"}
+[debug] [2026-06-29T12:52:16.449Z] ----------------------------------------------------------------------
+[debug] [2026-06-29T12:52:16.452Z] Command:       C:\nvm4w\nodejs\node.exe C:\nvm4w\nodejs\node_modules\firebase-tools\lib\bin\firebase.js login
+[debug] [2026-06-29T12:52:16.452Z] CLI Version:   15.22.3
+[debug] [2026-06-29T12:52:16.452Z] Platform:      win32
+[debug] [2026-06-29T12:52:16.452Z] Node Version:  v24.16.0
+[debug] [2026-06-29T12:52:16.452Z] Detected Agent: unknown
+[debug] [2026-06-29T12:52:16.452Z] Time:          Mon Jun 29 2026 15:52:16 GMT+0300 (Eastern European Summer Time)
+[debug] [2026-06-29T12:52:16.452Z] ----------------------------------------------------------------------
+[debug] 
+[info] i  The Firebase CLI’s MCP server feature can optionally make use of Gemini in Firebase. Learn more about Gemini in Firebase and how it uses your data: https://firebase.google.com/docs/gemini-in-firebase#how-gemini-in-firebase-uses-your-data 
+[info] 
+[info] i  Firebase optionally collects CLI and Emulator Suite usage and error reporting information to help improve our products. Data is collected in accordance with Google's privacy policy (https://policies.google.com/privacy) and is not used to identify you. 
+[info] 
+[info] i  To change your preferences at any time, run `firebase logout` and `firebase login` again. 
+[info] 
+[info] Visit this URL on this device to log in:
+[info] https://accounts.google.com/o/oauth2/auth?client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com&scope=email%20openid%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloudplatformprojects.readonly%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Ffirebase%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&response_type=code&state=708942697&redirect_uri=http%3A%2F%2Flocalhost%3A9005
+[info] 
+[info] Waiting for authentication...

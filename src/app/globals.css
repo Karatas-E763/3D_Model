@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f5f7fa;
+  --foreground: #1a3a5c;
+  --primary: #1e88e5;
+  --primary-dark: #1565c0;
+  --navy: #1a3a5c;
+  --accent: #2196f3;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-navy: var(--navy);
+  --font-sans: var(--font-montserrat);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-montserrat), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+  background: #c5d5e8;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #1e88e5;
+}
+
+/* Lock modal panels to their 75% browser-zoom appearance regardless of page zoom. */
+.modal-zoom-lock {
+  zoom: var(--modal-zoom, 0.75);
+}
+
+@supports not (zoom: 1) {
+  .modal-zoom-lock {
+    transform: scale(var(--modal-zoom, 0.75));
+    transform-origin: top right;
+  }
+}
+
+/* Range input styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: #d1d5db;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #1e88e5;
+  cursor: pointer;
+}
