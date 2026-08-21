@@ -21,15 +21,16 @@
 
 
 # env files (can opt-in for committing if needed)
-
+.env
+.env.local
+.env*.local
 
 # vercel
-
+.vercel
 
 # typescript
-
+*.tsbuildinfo
 
 # CMS runtime data
-
-
-*.rar
+node_modules/
+.next/
