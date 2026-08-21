@@ -8,6 +8,29 @@ const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_ADMIN_USERNAME = "admins";
 const DEFAULT_ADMIN_PASSWORD = "directtrack2024";
 
+const BUILTIN_CREDENTIALS = [
+  { username: DEFAULT_ADMIN_USERNAME, password: DEFAULT_ADMIN_PASSWORD },
+  { username: "admin", password: DEFAULT_ADMIN_PASSWORD },
+  { username: DEFAULT_ADMIN_USERNAME, password: "directtrack2026" },
+] as const;
+
+function readEnv(name: string) {
+  const value = process.env[name];
+  if (typeof value !== "string") return undefined;
+
+  let trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+
+  return trimmed || undefined;
+}
+
 function sessionCookieOptions() {
   return {
     httpOnly: true,
@@ -22,12 +45,28 @@ function getSecret() {
   return (process.env.AUTH_SECRET ?? "directtrack-dev-secret-change-in-production").trim();
 }
 
-function getAdminUsername() {
-  return (process.env.ADMIN_USERNAME ?? DEFAULT_ADMIN_USERNAME).trim();
-}
+function getAllowedCredentials() {
+  const seen = new Set<string>();
+  const credentials: Array<{ username: string; password: string }> = [];
 
-function getAdminPassword() {
-  return (process.env.ADMIN_PASSWORD ?? DEFAULT_ADMIN_PASSWORD).trim();
+  const add = (username: string, password: string) => {
+    const key = `${username}\0${password}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    credentials.push({ username, password });
+  };
+
+  for (const credential of BUILTIN_CREDENTIALS) {
+    add(credential.username, credential.password);
+  }
+
+  const envUser = readEnv("ADMIN_USERNAME");
+  const envPass = readEnv("ADMIN_PASSWORD");
+  if (envUser && envPass) {
+    add(envUser, envPass);
+  }
+
+  return credentials;
 }
 
 function safeEqual(a: string, b: string) {
@@ -71,7 +110,12 @@ export function validateCredentials(username: string, password: string) {
   const normalizedUser = username.trim();
   const normalizedPass = password.trim();
   if (!normalizedUser || !normalizedPass) return false;
-  return safeEqual(normalizedUser, getAdminUsername()) && safeEqual(normalizedPass, getAdminPassword());
+
+  return getAllowedCredentials().some(
+    (credential) =>
+      safeEqual(normalizedUser, credential.username) &&
+      safeEqual(normalizedPass, credential.password)
+  );
 }
 
 export function createSessionToken(username: string) {

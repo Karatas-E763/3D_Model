@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { clearSessionOnResponse, getSessionUser } from "@/lib/auth";
 
+export const runtime = "nodejs";
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
 
